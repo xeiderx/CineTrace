@@ -1,0 +1,44 @@
+name: cinetrace
+
+x-app: &app
+  build: .
+  image: cinetrace:local
+  restart: unless-stopped
+  env_file:
+    - .env
+  environment:
+    # 容器内固定指向挂载卷，宿主机上的 .env 不需要关心容器路径
+    DATABASE_PATH: /data/cinetrace.db
+    ARCHIVE_DIR: /data/archive
+    TZ: ${TZ:-Asia/Shanghai}
+  volumes:
+    # 数据库与原始归档都落在这个卷里，换容器不丢数据
+    - cinetrace-data:/data
+
+services:
+  web:
+    <<: *app
+    command: npm run start
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+  worker:
+    <<: *app
+    command: npm run worker
+    depends_on:
+      # 等 web 起来说明迁移已完成，worker 无需抢跑
+      web:
+        condition: service_healthy
+
+volumes:
+  cinetrace-data:
