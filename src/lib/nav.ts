@@ -1,0 +1,42 @@
+import {
+  BarChart3,
+  Compass,
+  LayoutDashboard,
+  Library,
+  ListVideo,
+  Settings,
+  type LucideIcon,
+} from "lucide-react";
+
+export type NavItem = {
+  href: string;
+  label: string;
+  icon: LucideIcon;
+};
+
+/**
+ * 导航项同时驱动桌面侧边栏与移动端底部导航，
+ * 单一数据源避免两端菜单不一致。
+ * 移动端底部最多放 5 项，超出部分归入侧边栏。
+ */
+export const NAV_ITEMS: NavItem[] = [
+  { href: "/", label: "概览", icon: LayoutDashboard },
+  { href: "/library", label: "档案库", icon: Library },
+  { href: "/collections", label: "片单", icon: ListVideo },
+  { href: "/stats", label: "统计", icon: BarChart3 },
+  { href: "/discover", label: "发现", icon: Compass },
+];
+
+/** 桌面端侧边栏额外的次级入口 */
+export const SECONDARY_NAV_ITEMS: NavItem[] = [
+  { href: "/settings", label: "设置", icon: Settings },
+];
+
+/** 移动端底部导航 */
+export const MOBILE_NAV_ITEMS: NavItem[] = [
+  { href: "/", label: "概览", icon: LayoutDashboard },
+  { href: "/library", label: "档案库", icon: Library },
+  { href: "/collections", label: "片单", icon: ListVideo },
+  { href: "/stats", label: "统计", icon: BarChart3 },
+  { href: "/settings", label: "设置", icon: Settings },
+];
