@@ -1,3 +1,4 @@
+import { randomInt } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { db } from "./index";
 import { platform, setting, user } from "./schema";
@@ -8,14 +9,25 @@ import { hashPassword } from "@/lib/password";
  * 初始化基础数据。可重复运行：
  * - 平台/设置按名字或 key 幂等插入
  * - 管理员账号优先取环境变量 ADMIN_USERNAME / ADMIN_PASSWORD；
- *   未配置时，首次部署（库中还没有任何账号）用下面的默认账号密码创建，
- *   并把明文打印到日志，方便在容器日志里直接取用。
+ *   未配置时，首次部署（库中还没有任何账号）自动生成一组初始账号，
+ *   并把明文密码打印到日志，方便在容器日志里直接取用。
  * 用法：npm run db:seed
  */
 
-/** 首次部署的默认账号。仅用于让你能进得去，登录后请立刻修改密码 */
+/** 首次部署的默认账号名。密码随机生成，避免公开仓库里的固定弱密码 */
 const DEFAULT_ADMIN_USERNAME = "admin";
-const DEFAULT_ADMIN_PASSWORD = "cinetrace123";
+
+/** 去掉了 0/O、1/l/I 等易混淆字符，方便照着日志手抄 */
+const PASSWORD_ALPHABET =
+  "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+function generatePassword(length = 14): string {
+  let password = "";
+  for (let i = 0; i < length; i += 1) {
+    password += PASSWORD_ALPHABET[randomInt(PASSWORD_ALPHABET.length)];
+  }
+  return password;
+}
 
 /** 仅在账号被创建时输出，便于 docker compose logs 一眼看到 */
 function printCredentials(username: string, password: string) {
@@ -77,7 +89,7 @@ async function seed() {
     return;
   }
 
-  await createUser(DEFAULT_ADMIN_USERNAME, DEFAULT_ADMIN_PASSWORD);
+  await createUser(DEFAULT_ADMIN_USERNAME, generatePassword());
 }
 
 await seed();
