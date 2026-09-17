@@ -1,5 +1,13 @@
 name: cinetrace
 
+# 部署前先准备环境变量文件（必需）：
+#   cp .env.example .env
+# 群晖 Container Manager 用户：把本文件内容整段粘贴进「项目」的 compose 输入框即可，
+# 但 .env 需要提前放到与本文件同一目录，否则 compose 会因找不到 env_file 报错。
+#
+# 首次部署（数据库为空）时，容器日志会打印初始账号与密码（admin / cinetrace123），查看方式：
+#   docker compose logs web | grep -A 5 初始账号
+
 x-app: &app
   build: .
   image: cinetrace:local
@@ -14,12 +22,15 @@ x-app: &app
   volumes:
     # 数据库与原始归档都落在这个卷里，换容器不丢数据
     - cinetrace-data:/data
+    # 群晖若想把数据直接放在 NAS 目录下，改用下一行（先在 File Station 建好目录）：
+    # - /volume1/docker/cinetrace/data:/data
 
 services:
   web:
     <<: *app
     command: npm run start
     ports:
+      # 左侧是 NAS 上的访问端口，冲突时改 .env 里的 WEB_PORT
       - "${WEB_PORT:-3000}:3000"
     healthcheck:
       test:
@@ -30,6 +41,7 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+      # 首次启动要跑迁移与构建产物预热，给足时间避免被误判为不健康
       start_period: 40s
 
   worker:

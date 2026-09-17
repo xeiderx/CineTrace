@@ -103,12 +103,6 @@ export function AuthForm({
             {pending ? "处理中…" : isSetup ? "创建并进入" : "登录"}
           </Button>
         </form>
-
-        {!isSetup ? (
-          <p className="mt-5 text-center text-xs text-muted-foreground">
-            忘记密码？在 NAS 上执行 <code className="rounded bg-muted px-1 py-0.5">npm run db:seed</code> 重设
-          </p>
-        ) : null}
       </CardContent>
     </Card>
   );

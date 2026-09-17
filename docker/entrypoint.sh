@@ -21,8 +21,9 @@ migrate() {
 echo "[entrypoint] 应用数据库迁移"
 migrate
 
-# 补基础数据（平台、设置、可选的管理员账号），已存在则跳过
-echo "[entrypoint] 初始化基础数据"
+# 补基础数据（平台、设置、管理员账号），已存在则跳过。
+# 数据库为空时会自动生成初始账号，明文密码由 db:seed 直接打印在下面的日志里。
+echo "[entrypoint] 初始化基础数据（首次部署会在此输出初始账号与密码）"
 npm run db:seed
 
 echo "[entrypoint] 启动：$*"
