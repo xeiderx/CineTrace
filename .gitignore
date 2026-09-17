@@ -1,0 +1,46 @@
+# ---- 依赖 ----
+node_modules/
+.pnpm-store/
+
+# ---- Next.js 构建产物 ----
+.next/
+out/
+build/
+dist/
+*.tsbuildinfo
+next-env.d.ts
+
+# ---- 环境变量（TMDB Key / 豆瓣 UID / 登录 Cookie）----
+.env
+.env.local
+.env.*.local
+
+# ---- 本地数据库（NAS 上走 Docker volume 映射）----
+data/
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
+
+# ---- 抓取原始响应归档与同步日志（体积大，含个人观影数据）----
+raw-archive/
+sync-logs/
+out/
+
+# ---- 日志 ----
+*.log
+logs/
+
+# ---- 测试与覆盖率 ----
+coverage/
+
+# ---- 编辑器 / 系统 ----
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+**/.DS_Store
+
+# ---- Docker 本地覆盖配置 ----
+docker-compose.override.yml

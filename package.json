@@ -1,0 +1,17 @@
+{
+  "name": "cinetrace",
+  "version": "0.1.0",
+  "description": "影视记录与媒体管理平台",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "verify": "node reference/phase0-verify.mjs",
+    "pow": "node reference/phase0-pow.mjs",
+    "strategy": "node reference/phase0-strategy.mjs",
+    "rss": "node reference/phase0-rss.mjs"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "cheerio": "^1.2.0"
+  }
+}
