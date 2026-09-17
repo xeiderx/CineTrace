@@ -7,9 +7,19 @@ name: cinetrace
 #
 # 首次部署（数据库为空）时，容器日志会打印自动生成的初始账号与密码，查看方式：
 #   docker compose logs web | grep -A 5 初始账号
+#
+# 构建卡在 apt / npm / 下载字体（Unable to connect / Failed to fetch）时，
+# 在 .env 里填上 HTTP_PROXY 与 HTTPS_PROXY（NAS 上跑 Docker 时用宿主机局域网 IP，
+# 不能写 127.0.0.1），然后重新构建：docker compose build --no-cache && docker compose up -d
 
 x-app: &app
-  build: .
+  build:
+    context: .
+    # 构建期代理（apt / npm / 下载字体都走它）。值取自 .env，留空即直连。
+    # 注意：必须写在 build.args 里才对 docker build 生效，写在 environment 里无效。
+    args:
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
   image: cinetrace:local
   restart: unless-stopped
   env_file:
@@ -19,6 +29,11 @@ x-app: &app
     DATABASE_PATH: /data/cinetrace.db
     ARCHIVE_DIR: /data/archive
     TZ: ${TZ:-Asia/Shanghai}
+    # 运行期代理（抓取豆瓣时用），同样留空即直连
+    HTTP_PROXY: ${HTTP_PROXY:-}
+    HTTPS_PROXY: ${HTTPS_PROXY:-}
+    # 内网与本机地址不走代理
+    NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1}
   volumes:
     # 数据库与原始归档都落在这个卷里，换容器不丢数据
     - cinetrace-data:/data
