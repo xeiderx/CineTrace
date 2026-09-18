@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { APP_VERSION_LABEL } from "@/lib/version";
 
 /** 首次启动时的引导文案与登录略有不同，共用同一个表单组件 */
 export function AuthForm({
@@ -26,7 +27,7 @@ export function AuthForm({
   return (
     <Card className="border-border/60 bg-card/70 backdrop-blur-xl">
       <CardContent className="pt-7">
-        <BrandMark className="mb-7" size={36} />
+        <BrandMark className="mb-7" size={36} subtitle={APP_VERSION_LABEL} />
 
         <h1 className="text-xl font-semibold tracking-tight">
           {isSetup ? "创建你的账号" : "欢迎回来"}

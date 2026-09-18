@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { NAV_ITEMS, SECONDARY_NAV_ITEMS, type NavItem } from "@/lib/nav";
 import { BrandMark } from "@/components/brand/logo";
+import { APP_VERSION_LABEL } from "@/lib/version";
 import { cn } from "@/lib/utils";
 
 function isActive(pathname: string, href: string) {
@@ -48,7 +49,7 @@ export function DesktopSidebar({ footer }: { footer?: React.ReactNode }) {
   return (
     <aside className="sticky top-0 hidden h-svh w-60 shrink-0 flex-col border-r border-sidebar-border bg-sidebar md:flex">
       <div className="flex h-16 items-center px-5">
-        <BrandMark size={28} />
+        <BrandMark size={28} subtitle={APP_VERSION_LABEL} />
       </div>
 
       <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-2">
