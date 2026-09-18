@@ -1,6 +1,7 @@
 "use server";
 
 import { cookies } from "next/headers";
+import { connection } from "next/server";
 import { redirect } from "next/navigation";
 import { count, eq } from "drizzle-orm";
 import { db } from "@/db";
@@ -13,6 +14,10 @@ export type ActionState = { error?: string } | undefined;
 
 /** 是否还没有任何账号——用于决定是否走首次引导流程 */
 export async function hasNoUser(): Promise<boolean> {
+  // better-sqlite3 是同步驱动，其查询会在预渲染阶段真的执行；
+  // 而构建期的库是空的，会因缺表直接让构建失败。这里声明依赖真实请求，
+  // 使调用它的页面退出预渲染（详见 next/dist/docs 的 connection 说明）。
+  await connection();
   const result = db.select({ value: count() }).from(user).get();
   return (result?.value ?? 0) === 0;
 }
