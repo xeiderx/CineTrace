@@ -69,7 +69,7 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
-ENV PORT=3000
+ENV PORT=5533
 ENV HOSTNAME=0.0.0.0
 
 # 生产依赖直接取自 prod-deps：不重装、不重编译，也不再需要 python3/make/g++
@@ -90,6 +90,6 @@ COPY --from=builder /app/reference ./reference
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-EXPOSE 3000
+EXPOSE 5533
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["npm", "run", "start"]

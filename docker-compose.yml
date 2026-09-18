@@ -53,14 +53,14 @@ services:
     <<: *app
     command: npm run start
     ports:
-      # 左侧是 NAS 上的访问端口，冲突时改 .env 里的 WEB_PORT
-      - "${WEB_PORT:-3000}:3000"
+      # 左侧是 NAS 上的访问端口，冲突时改 .env 里的 WEB_PORT；右侧是容器内端口
+      - "${WEB_PORT:-5533}:5533"
     healthcheck:
       test:
         - CMD
         - node
         - -e
-        - "fetch('http://127.0.0.1:3000/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+        - "fetch('http://127.0.0.1:5533/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
       interval: 30s
       timeout: 5s
       retries: 3
