@@ -3,29 +3,24 @@ import { db } from "@/db";
 import { syncIssue, viewRecord, work, type NewWork } from "@/db/schema";
 import { getSetting } from "@/lib/settings";
 import { archiveRaw } from "@/lib/douban/archive";
-import { fetchWithPow, isBlocked, needsLogin, req } from "@/lib/douban/client";
-import {
-  PARSER_VERSION,
-  parseCollectTotal,
-  parseListPage,
-  parseSubject,
-  type ListPageItem,
-  type SubjectDetail,
-} from "@/lib/douban/parse";
-import { hasTmdbKey, matchWork, type MatchHit } from "@/lib/tmdb";
+import { isBlocked, needsLogin, req } from "@/lib/douban/client";
+import { PARSER_VERSION, parseCollectTotal, parseListPage, type ListPageItem } from "@/lib/douban/parse";
+import { hasTmdbKey, matchWork, tmdbDetail, type MatchHit, type TmdbDetail } from "@/lib/tmdb";
 import type { Job, JobResult } from "../job";
 import { sleep, throttle } from "../throttle";
 
 /**
  * 豆瓣同步主任务：把 Phase 0 验证过的链路正式产品化。
  *
- * 抓取 → 解析 → TMDB 匹配 → 落 work/view_record → 归档 + 错误记录。
+ * 抓取列表页 → 解析 → TMDB 匹配 → 落 work/view_record → 归档 + 错误记录。
  *
  * 关键设计：
  * - 幂等：view_record.sourceKey = `douban:{id}`，重跑不会产生重复记录
- * - 增量：仅对「尚无元数据」的条目抓详情页 + 调 TMDB，
- *   列表页每轮全量翻（只花翻页等待），详情页只在首次出现时抓一次
+ * - 增量：列表页每轮全量翻（只花翻页等待），已同步过元数据的条目不再调 TMDB
  * - 手动优先：matchStatus 为 manual 的条目不再自动改写绑定关系
+ * - 不抓详情页：机房 IP 访问豆瓣详情页必被风控拦截，
+ *   而匹配只需列表页的「中文名 / 别名 / 年份」，
+ *   时长、类型、导演等缺失字段改由 TMDB 详情接口补齐
  */
 
 const DOUBAN_ORIGIN = "https://movie.douban.com";
@@ -41,18 +36,8 @@ function guessMediaType(titleCn: string): "movie" | "tv" {
   return /第\s*[一二三四五六七八九十\d]+\s*季/.test(titleCn) ? "tv" : "movie";
 }
 
-/** 豆瓣的上映日带着地区后缀（如 `2024-01-01(中国大陆)`），只取日期部分。 */
-function isoDate(raw: string | null): string | null {
-  const m = raw?.match(/^(\d{4}-\d{2}-\d{2})/);
-  return m ? m[1] : null;
-}
-
 function collectUrl(uid: string, start: number): string {
   return `${DOUBAN_ORIGIN}/people/${encodeURIComponent(uid)}/collect?sort=time&start=${start}`;
-}
-
-function subjectUrl(doubanId: string): string {
-  return `${DOUBAN_ORIGIN}/subject/${doubanId}/`;
 }
 
 export const doubanSyncJob: Job = {
@@ -94,7 +79,7 @@ export const doubanSyncJob: Job = {
         .run();
     };
 
-    /** 处理列表页的一条条目：补详情 → 匹配 → 落库。 */
+    /** 处理列表页的一条条目：匹配 → 补 TMDB 详情 → 落库。 */
     const processItem = async (item: ListPageItem) => {
       stats.itemsSeen += 1;
       const { doubanId, titleCn } = item;
@@ -113,7 +98,7 @@ export const doubanSyncJob: Job = {
 
       let workId = existingWork?.id ?? null;
 
-      // 手动绑定的条目不再自动改写；已有元数据的条目跳过详情页与 TMDB 调用
+      // 手动绑定的条目不再自动改写；已有元数据的条目跳过 TMDB 调用
       const manuallyBound = existingWork?.matchStatus === "manual";
       if (!manuallyBound && !existingWork?.metadataSyncedAt) {
         const resolved = await resolveWork(item, issue);
@@ -214,7 +199,7 @@ type IssueReporter = (
 ) => void;
 
 /**
- * 抓详情页 → TMDB 匹配 → 写 work。
+ * TMDB 匹配 → 补详情 → 写 work。
  * 返回作品 id；匹配失败也会落一行 matchStatus='failed' 的作品，
  * 这样观影记录不至于因为「暂时匹配不上」而丢失。
  */
@@ -222,31 +207,8 @@ async function resolveWork(item: ListPageItem, issue: IssueReporter): Promise<nu
   const { doubanId, titleCn } = item;
   if (!doubanId) return null;
 
-  let detail: SubjectDetail | null = null;
-  const detailUrl = subjectUrl(doubanId);
-
+  // 条目之间的节奏控制：TMDB 侧同样需要节流，间隔取自「同步延迟」设置
   await throttle();
-  try {
-    const { res } = await fetchWithPow(detailUrl);
-    if (isBlocked(res.text)) {
-      issue("blocked", doubanId, titleCn, "详情页被风控拦截");
-      return null;
-    }
-    if (res.status !== 200) {
-      issue("network", doubanId, titleCn, `详情页 status=${res.status}`);
-      return null;
-    }
-    const parsed = parseSubject(res.text);
-    if (!parsed.hasInfo) {
-      issue("parse", doubanId, titleCn, "详情页缺少 #info 区块，疑似改版或空页");
-      return null;
-    }
-    detail = parsed;
-    archiveRaw({ url: detailUrl, kind: "detail", body: res.text, parserVersion: PARSER_VERSION });
-  } catch (error) {
-    issue("network", doubanId, titleCn, error instanceof Error ? error.message : String(error));
-    return null;
-  }
 
   const outcome = await matchWork({ titleCn, aliases: item.aliases, year: item.year });
   let hit: MatchHit | null = null;
@@ -255,6 +217,9 @@ async function resolveWork(item: ListPageItem, issue: IssueReporter): Promise<nu
   } else {
     issue(outcome.reason, doubanId, titleCn, outcome.detail);
   }
+
+  // 时长/类型/导演等列表页没有的字段，命中后由 TMDB 详情接口补齐
+  const detail = hit ? await tmdbDetail(hit.result.mediaType, hit.result.tmdbId) : null;
 
   const values = buildWorkValues(item, detail, hit, outcome.ok ? null : outcome.score);
   const existing = db.select({ id: work.id }).from(work).where(eq(work.doubanId, doubanId)).get();
@@ -272,10 +237,10 @@ async function resolveWork(item: ListPageItem, issue: IssueReporter): Promise<nu
   }
 }
 
-/** 把「豆瓣列表页 + 详情页 + TMDB 命中」合并成一行 work。豆瓣字段优先，TMDB 补齐其余。 */
+/** 把「豆瓣列表页 + TMDB 命中与详情」合并成一行 work。豆瓣字段优先，TMDB 补齐其余。 */
 function buildWorkValues(
   item: ListPageItem,
-  detail: SubjectDetail | null,
+  detail: TmdbDetail | null,
   hit: MatchHit | null,
   failedScore: number | null,
 ): NewWork {
@@ -284,15 +249,15 @@ function buildWorkValues(
     mediaType: tmdb?.mediaType ?? guessMediaType(item.titleCn),
     tmdbId: tmdb?.tmdbId ?? null,
     doubanId: item.doubanId,
-    title: detail?.title || item.titleCn,
+    title: item.titleCn,
     originalTitle: tmdb?.originalTitle ?? item.aliases[0] ?? null,
     // 豆瓣年份是「标记来源」的年份，比 TMDB 更贴近匹配目标
-    year: item.year ?? detail?.year ?? tmdb?.year ?? null,
+    year: item.year ?? tmdb?.year ?? null,
     posterPath: tmdb?.posterPath ?? null,
     backdropPath: tmdb?.backdropPath ?? null,
     overview: tmdb?.overview ?? null,
     runtime: detail?.runtime ?? null,
-    releaseDate: isoDate(detail?.releaseDate ?? null) ?? tmdb?.releaseDate ?? null,
+    releaseDate: detail?.releaseDate ?? tmdb?.releaseDate ?? null,
     imdbId: detail?.imdbId ?? null,
     genres: JSON.stringify(detail?.genres ?? []),
     countries: JSON.stringify(item.country ? [item.country] : []),

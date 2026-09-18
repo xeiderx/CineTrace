@@ -141,6 +141,82 @@ export async function tvSeasonExists(tvId: number, season: number): Promise<bool
 }
 
 /* -------------------------------------------------------------------------- */
+/*                                  作品详情                                   */
+/* -------------------------------------------------------------------------- */
+
+/** 详情接口里我们关心的字段；电影与剧集的字段名不同，统一后再返回。 */
+type TmdbRawDetail = {
+  runtime?: number | null;
+  episode_run_time?: number[];
+  last_episode_to_air?: { runtime?: number | null } | null;
+  release_date?: string;
+  first_air_date?: string;
+  imdb_id?: string | null;
+  external_ids?: { imdb_id?: string | null };
+  genres?: { name?: string }[];
+  created_by?: { name?: string }[];
+  credits?: { crew?: { job?: string; name?: string }[] };
+};
+
+export type TmdbDetail = {
+  /** 分钟：电影为片长，剧集为单集时长 */
+  runtime: number | null;
+  releaseDate: string | null;
+  imdbId: string | null;
+  genres: string[];
+  directors: string[];
+};
+
+/**
+ * 拉一部作品在 TMDB 上的详情，补齐豆瓣列表页没有的字段。
+ *
+ * 豆瓣详情页已不再抓取（机房 IP 必被风控），时长/类型/导演等
+ * 只能靠这里补。请求失败不抛错——元数据缺失不应该让同步中断。
+ */
+export async function tmdbDetail(
+  mediaType: "movie" | "tv",
+  tmdbId: number,
+): Promise<TmdbDetail | null> {
+  const query = new URLSearchParams({
+    language: String(getSetting("tmdb.language")),
+    api_key: process.env.TMDB_API_KEY ?? "",
+    append_to_response: "credits,external_ids",
+  });
+
+  try {
+    const res = await fetch(`${TMDB_BASE}/${mediaType}/${tmdbId}?${query}`, {
+      dispatcher,
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(TMDB_TIMEOUT_MS),
+    });
+    if (!res.ok) return null;
+
+    const body = (await res.json()) as TmdbRawDetail;
+    const isTv = mediaType === "tv";
+
+    // 剧集没有顶层 runtime，退到「分集时长 → 最近一集时长」
+    const runtime = isTv
+      ? body.episode_run_time?.[0] ?? body.last_episode_to_air?.runtime ?? null
+      : body.runtime ?? null;
+
+    // 剧集的主创在 created_by，电影才是 crew 里的 Director
+    const directors = isTv
+      ? (body.created_by ?? []).map((c) => c.name ?? "").filter(Boolean)
+      : (body.credits?.crew ?? []).filter((c) => c.job === "Director").map((c) => c.name ?? "").filter(Boolean);
+
+    return {
+      runtime: runtime && runtime > 0 ? runtime : null,
+      releaseDate: (isTv ? body.first_air_date : body.release_date) || null,
+      imdbId: (isTv ? body.external_ids?.imdb_id : body.imdb_id) || null,
+      genres: (body.genres ?? []).map((g) => g.name ?? "").filter(Boolean),
+      directors,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/* -------------------------------------------------------------------------- */
 /*                                 分层匹配                                    */
 /* -------------------------------------------------------------------------- */
 
