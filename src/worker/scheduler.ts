@@ -51,8 +51,11 @@ export class Scheduler {
         if (job.windowed && !isWithinWindow()) {
           continue;
         }
-        await runJob(job);
-        job.lastFinishedAt = Date.now();
+        // 抢不到锁（上一轮还在跑，或进程被 kill 后锁未到期）意味着任务并没执行，
+        // 不能记成「刚跑完」——否则会白白空等一个 interval 才重试
+        if (await runJob(job)) {
+          job.lastFinishedAt = Date.now();
+        }
       }
     } finally {
       this.running = false;
