@@ -2,15 +2,20 @@ name: cinetrace
 
 # 部署前先准备环境变量文件（必需）：
 #   cp .env.example .env
+# ⚠️ 文件名必须是 .env（带点）。叫 env / env.txt 会被静默忽略，代理等配置全部失效。
+#    群晖 File Station 里新建文件时容易漏掉开头的点，改完先验证：
+#      docker compose config | grep -i proxy
 # 群晖 Container Manager 用户：把本文件内容整段粘贴进「项目」的 compose 输入框即可，
 # 但 .env 需要提前放到与本文件同一目录，否则 compose 会因找不到 env_file 报错。
 #
 # 首次部署（数据库为空）时，容器日志会打印自动生成的初始账号与密码，查看方式：
 #   docker compose logs web | grep -A 5 初始账号
 #
-# 构建卡在 apt / npm / 下载字体（Unable to connect / Failed to fetch）时，
-# 在 .env 里填上 HTTP_PROXY 与 HTTPS_PROXY（NAS 上跑 Docker 时用宿主机局域网 IP，
-# 不能写 127.0.0.1），然后重新构建：docker compose build --no-cache && docker compose up -d
+# 构建卡在 apt / npm / 下载字体（Unable to connect / Failed to fetch）时，两条路选一条：
+#   A. 有代理：在 .env 里填 HTTP_PROXY 与 HTTPS_PROXY（NAS 上跑 Docker 时用宿主机局域网 IP，
+#      不能写 127.0.0.1，因为构建容器里的 127.0.0.1 是它自己）
+#   B. 没代理：填 APT_MIRROR 与 NPM_REGISTRY 走国内镜像站
+# 改完重新构建：docker compose build --no-cache && docker compose up -d
 
 x-app: &app
   build:
@@ -20,6 +25,9 @@ x-app: &app
     args:
       HTTP_PROXY: ${HTTP_PROXY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
+      # 可选：Debian / npm 镜像站加速，没有代理时也能用，留空即官方源
+      APT_MIRROR: ${APT_MIRROR:-}
+      NPM_REGISTRY: ${NPM_REGISTRY:-}
   image: cinetrace:local
   restart: unless-stopped
   env_file:

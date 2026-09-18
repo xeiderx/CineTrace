@@ -13,12 +13,28 @@ ENV http_proxy=$HTTP_PROXY \
     no_proxy=localhost,127.0.0.1,::1 \
     NO_PROXY=localhost,127.0.0.1,::1
 WORKDIR /app
+# 没有代理时可选：把 APT_MIRROR 指向镜像站（只填主机名，如 mirrors.tuna.tsinghua.edu.cn）
+ARG APT_MIRROR
 # better-sqlite3 在缺少预编译包时需要现场编译
-RUN apt-get update \
+RUN if [ -n "$APT_MIRROR" ]; then \
+      for f in /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources; do \
+        if [ -f "$f" ]; then sed -i "s|deb.debian.org|$APT_MIRROR|g" "$f"; fi; \
+      done; \
+    fi \
+  && apt-get update \
   && apt-get install -y --no-install-recommends python3 make g++ \
   && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
-RUN npm ci
+# 同理，NPM_REGISTRY 可指向 npmmirror
+ARG NPM_REGISTRY
+RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
+  && npm ci
+
+# ---- 生产依赖裁剪 ----
+# 就地在 deps 的完整安装上裁掉 devDependencies：复用同一批层，
+# 既不重新联网，也不会重新编译 better-sqlite3 的原生模块。
+FROM deps AS prod-deps
+RUN npm prune --omit=dev
 
 # ---- 构建 Next.js ----
 FROM node:22-bookworm-slim AS builder
@@ -40,26 +56,17 @@ RUN npm run build
 
 # ---- 运行时：web 与 worker 共用同一镜像，靠 command 区分 ----
 FROM node:22-bookworm-slim AS runner
-# 这里不用 ENV：代理只在下面两条联网安装命令里临时生效，
-# 避免残留到最终镜像把运行期的 localhost / 内网请求也导去代理。
-ARG HTTP_PROXY
-ARG HTTPS_PROXY
 WORKDIR /app
-
-RUN export http_proxy=$HTTP_PROXY https_proxy=$HTTPS_PROXY no_proxy=localhost,127.0.0.1,::1 \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends python3 make g++ \
-    && rm -rf /var/lib/apt/lists/*
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 
-# worker 直接跑 TS 源码，因此生产依赖里同样保留 tsx 与源码目录
+# 生产依赖直接取自 prod-deps：不重装、不重编译，也不再需要 python3/make/g++
+# 那套编译工具链（better-sqlite3 的原生模块在 deps 阶段已编译好）。
+COPY --from=prod-deps /app/node_modules ./node_modules
 COPY package.json package-lock.json ./
-RUN export http_proxy=$HTTP_PROXY https_proxy=$HTTPS_PROXY no_proxy=localhost,127.0.0.1,::1 \
-    && npm ci --omit=dev && npm cache clean --force
 
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
