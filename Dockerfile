@@ -1,5 +1,6 @@
 # 构建期代理：由 docker-compose.yml 的 build.args 注入，留空即直连。
-# apt、npm、Next.js 构建期下载字体都会读取这些变量（apt 只认小写形式）。
+# 需要联网的只有 apt 与 npm（字体已本地化在 public/fonts，不再请求 Google）。
+# apt 只认小写形式的代理变量。
 # 每个 stage 都要重新声明一次 ARG 才在该 stage 内可见。
 
 # ---- 依赖安装 ----
@@ -13,21 +14,29 @@ ENV http_proxy=$HTTP_PROXY \
     no_proxy=localhost,127.0.0.1,::1 \
     NO_PROXY=localhost,127.0.0.1,::1
 WORKDIR /app
-# 没有代理时可选：把 APT_MIRROR 指向镜像站（只填主机名，如 mirrors.tuna.tsinghua.edu.cn）
+# 把 APT_MIRROR 指向镜像站（只填主机名，如 mirrors.tuna.tsinghua.edu.cn）。
+# 即使有代理也建议填：代理转发 deb.debian.org 大文件时偶发 502，走国内镜像更稳更快。
 ARG APT_MIRROR
-# better-sqlite3 在缺少预编译包时需要现场编译
+# better-sqlite3 在缺少预编译包时需要现场编译。
+# 镜像站在国内，走直连比绕代理快得多，所以填了 APT_MIRROR 就在本次 RUN 内临时摘掉代理。
+# Acquire::Retries 让单个包偶发 502 时自动重试，而不是整个构建以 exit code 100 失败。
 RUN if [ -n "$APT_MIRROR" ]; then \
       for f in /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources; do \
         if [ -f "$f" ]; then sed -i "s|deb.debian.org|$APT_MIRROR|g" "$f"; fi; \
       done; \
+      unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY; \
     fi \
-  && apt-get update \
-  && apt-get install -y --no-install-recommends python3 make g++ \
+  && apt-get -o Acquire::Retries=5 update \
+  && apt-get -o Acquire::Retries=5 install -y --no-install-recommends python3 make g++ \
   && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
-# 同理，NPM_REGISTRY 可指向 npmmirror
+# 同理，NPM_REGISTRY 可指向 npmmirror；填了就让它直连，npm ci 的下载量比 apt 还大
 ARG NPM_REGISTRY
-RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
+RUN if [ -n "$NPM_REGISTRY" ]; then \
+      npm config set registry "$NPM_REGISTRY"; \
+      host=$(echo "$NPM_REGISTRY" | sed -E 's|^https?://||; s|/.*$||'); \
+      export no_proxy="$no_proxy,$host" NO_PROXY="$NO_PROXY,$host"; \
+    fi \
   && npm ci
 
 # ---- 生产依赖裁剪 ----

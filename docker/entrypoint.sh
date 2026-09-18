@@ -4,6 +4,10 @@
 # 但并发写入会让 SQLite 短暂上锁，故加重试兜底。
 set -e
 
+# 兜底建好数据目录。db/index.ts 里也有 mkdirSync，但绑定挂载到宿主机目录时
+# 先建出来能给出更明确的报错位置，也避免挂载点权限异常时误导排查方向。
+mkdir -p "$(dirname "${DATABASE_PATH:-/data/cinetrace.db}")" "${ARCHIVE_DIR:-/data/archive}"
+
 migrate() {
   i=1
   while [ "$i" -le 5 ]; do

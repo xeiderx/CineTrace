@@ -16,7 +16,9 @@ next-env.d.ts
 .env.*.local
 
 # ---- 本地数据库（NAS 上走 Docker volume 映射）----
-data/
+# 只忽略目录内容，保留 .gitkeep，clone 下来就有 data/ 可直接跑
+data/*
+!data/.gitkeep
 *.sqlite
 *.sqlite3
 *.db
