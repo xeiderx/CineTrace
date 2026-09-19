@@ -35,16 +35,35 @@ export function releaseLock(name: string): void {
     .run();
 }
 
-/** 包一层自动释放，任务体无论成功失败都不会把锁留着。 */
+/**
+ * 续租：把过期时间往后推，但仍限定只有持有者能推。
+ * 任务耗时可能远超 TTL——首次全量要回扫两千多条、上百页，
+ * 只能给 TTL 定个「够用的初值」再靠续租撑住；
+ * 没有续租的话，长任务会在跑完前丢锁，另一进程趁机抢锁抓同一个账号。
+ */
+function renewLock(name: string, ttlMs: number): void {
+  db.update(taskLock)
+    .set({ expiresAt: new Date(Date.now() + ttlMs) })
+    .where(and(eq(taskLock.name, name), eq(taskLock.owner, WORKER_ID)))
+    .run();
+}
+
+/** 包一层自动续租与释放，任务体无论成功失败都不会把锁留着。 */
 export async function withLock<T>(
   name: string,
   ttlMs: number,
   fn: () => Promise<T>,
 ): Promise<T | null> {
   if (!acquireLock(name, ttlMs)) return null;
+  // 每 TTL 的三分之一续租一次，留足容错余量再兜底 30 秒下限
+  const renewTimer = setInterval(
+    () => renewLock(name, ttlMs),
+    Math.max(30_000, Math.floor(ttlMs / 3)),
+  );
   try {
     return await fn();
   } finally {
+    clearInterval(renewTimer);
     releaseLock(name);
   }
 }

@@ -110,6 +110,20 @@ export function parseListTotal(html: string): number | null {
   return m ? Number(m[1]) : null;
 }
 
+/**
+ * 判断列表页是否还有下一页。
+ * 必须读分页器里的「后页」链接，不能拿「本页是否满 15 条」来推断末页——
+ * 实测豆瓣在条目被删除或设为私密时会返回不足 15 条的中间页
+ * （如第 8 页只有 14 条，后面却还有 140 页），按短页判末页会让列表被提前截断。
+ * 返回 null 表示页面里没有分页器（结构异常），由调用方兜底。
+ */
+export function parseHasNext(html: string): boolean | null {
+  const $ = load(html);
+  const next = $("span.next").first();
+  if (next.length === 0) return null;
+  return next.find('link[rel="next"]').length > 0;
+}
+
 /* -------------------------------------------------------------------------- */
 /*                                   详情页                                    */
 /* -------------------------------------------------------------------------- */

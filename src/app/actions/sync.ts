@@ -165,8 +165,10 @@ function manualSyncSnapshot(): ManualSyncState {
 /**
  * 立即抓取一轮豆瓣。绕过 sync.enabled 总开关——用户手动点按钮就是明确的意图。
  * 与 worker 的定时任务共用同一把锁，撞上时直接告知而不是排队等待。
- * 抓取耗时可达十几分钟，因此和补全一样交给 after() 在响应结束后跑，
- * 期间页面导航不会被挂住。
+ * 抓取耗时视规模而定：首次全量回扫两千多条要数小时（逐条等 TMDB），
+ * 之后元数据已齐就只剩翻页间隔，几十分钟即可跑完。
+ * 因此和补全一样交给 after() 在响应结束后跑，期间页面导航不会被挂住。
+ * 锁的存活由续租维持，不会因为跑得久而被 worker 抢走。
  */
 export async function startManualSyncAction(): Promise<ManualSyncState> {
   if (manualSync?.running) return manualSyncSnapshot();

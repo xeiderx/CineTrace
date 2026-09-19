@@ -5,7 +5,7 @@ import { getSetting, setSetting } from "@/lib/settings";
 import { VIEW_STATUS_LABELS, type ViewStatus } from "@/lib/labels";
 import { archiveRaw } from "@/lib/douban/archive";
 import { isBlocked, needsLogin, req } from "@/lib/douban/client";
-import { PARSER_VERSION, parseListPage, parseListTotal, type ListPageItem } from "@/lib/douban/parse";
+import { PARSER_VERSION, parseHasNext, parseListPage, parseListTotal, type ListPageItem } from "@/lib/douban/parse";
 import {
   baseTitleOf,
   hasTmdbKey,
@@ -16,7 +16,7 @@ import {
   type TmdbDetail,
 } from "@/lib/tmdb";
 import { runJob, type Job, type JobResult } from "../job";
-import { randomInt, sleep, throttle } from "../throttle";
+import { isWithinWindow, randomInt, sleep, throttle } from "../throttle";
 
 /**
  * 豆瓣同步主任务：把 Phase 0 验证过的链路正式产品化。
@@ -91,8 +91,10 @@ export const doubanSyncJob: Job = {
   name: "douban-sync",
   kind: "douban-html",
   intervalMs: 6 * 60 * 60 * 1000,
-  // 全量回扫时上百页配上 5~12 秒的随机间隔，最坏要跑半小时以上；
-  // 锁必须比任务长，否则兜底过期会让两个进程同时抓同一个账号
+  // 锁的初值只保证「进得去、拿得住」，实际时长由 withLock 每 TTL/3 续租兜住：
+  // 首次全量要回扫两千多条、逐条等 TMDB（每条 3~8 秒）＋上百页 5~12 秒翻页间隔，
+  // 实测量级是数小时；后续全量元数据已齐，只剩翻页间隔，几十分钟即可跑完。
+  // 单靠一个够大的静值 TTL 覆盖不了这两种差别极大的耗时，所以必须续租。
   lockTtlMs: 60 * 60 * 1000,
   run: () => runDoubanSync(),
 };
@@ -233,6 +235,7 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
 
   // 三种情况要完整翻页：首次运行（没有全量时间戳）、距上次满一周、手动触发
   const full = options.full === true || isFullSyncDue();
+  const mode = full ? "全量" : "增量";
 
   // 「看过」是主列表必抓；两个小列表各有开关。
   // filter 只删项不重排，想看 → 在看 → 看过的覆盖优先级仍由 LISTS 保证。
@@ -245,17 +248,41 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
   // 预热：先拿到 bid 等基础 Cookie，首屏直接请求容易被判为异常流量
   await req(`${DOUBAN_ORIGIN}/`);
 
+  // 断点续跑：上一轮撞上作息窗口结束时留下的位置。只有全量轮才认游标——
+  // 增量轮本来就只翻首页，从半途开始毫无意义，反而会漏掉最新条目。
+  // 游标只对「暂停时所在的那个列表」生效，它之前的列表照旧从第 1 页抓：
+  // 那些列表上轮已经抓完，重抓一遍是幂等的（只多几次请求），
+  // 换来的是「续跑期间改了列表开关也绝不会漏抓」——若按游标直接跳过前面的列表，
+  // 中途把想看打开就会让这个列表一直抓到下次全量为止。
+  const cursor = full ? parseCursor(String(getSetting("douban.syncCursor") ?? "").trim()) : null;
+
   let stopped: string | null = null;
   let totalSum = 0;
   let totalKnown = false;
+  /** 因作息窗口结束而暂停的位置；与「被豆瓣拒绝」不同，下一轮直接续跑 */
+  let pausedAt: { status: ViewStatus; start: number } | null = null;
 
   for (const list of enabledLists) {
     const label = VIEW_STATUS_LABELS[list.status];
-    let processed = 0;
-    let start = 0;
+    // 游标命中当前列表时从断点页起抓；命中的是别的列表就照常从第 1 页起抓。
+    // 续跑时 processed 一并从断点开始计数：它要和列表总条数比，用来判断是否翻到底
+    const listStart = cursor !== null && cursor.status === list.status ? cursor.start : 0;
+    let start = listStart;
+    let processed = start;
     let blockedAtFirstPage = false;
 
     while (start <= MAX_START) {
+      // 作息窗口只在任务启动前由调度器检查一次，跑起来之后就没人管了。
+      // 首次全量要数小时，傍晚开跑会一路抓到凌晨——连续数小时不间断的请求
+      // 才是真正像机器的特征。这里每翻一页查一次，出窗就记下断点、本轮中止，
+      // 下一轮（仍是全量）从断点页接着跑，绝不跨夜。
+      // 只对全量轮生效：增量轮本来就只翻几页，分钟级就跑完，没有必要为它留断点
+      // （留了反而会在下次全量时把前面的列表一并跳过）。
+      if (full && !isWithinWindow()) {
+        pausedAt = { status: list.status, start };
+        break;
+      }
+
       const url = listUrl(uid, list.path, start);
       // 翻页之间必须留随机间隔，否则整轮节奏过于机械
       if (start > 0) await sleep(randomInt(PAGE_GAP_MIN_MS, PAGE_GAP_MAX_MS));
@@ -264,7 +291,7 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
       const pageNo = start / LIST_PAGE_SIZE + 1;
       if (page.status !== 200 || isBlocked(page.text) || needsLogin(page.text)) {
         issue("blocked", null, null, `${label}列表第 ${pageNo} 页受限 status=${page.status}`);
-        blockedAtFirstPage = start === 0;
+        blockedAtFirstPage = start === listStart;
         stopped = blockedAtFirstPage
           ? `豆瓣拒绝访问（${label}列表首页即受限），本轮中止`
           : `${label}列表第 ${pageNo} 页起被拒绝访问，本轮提前结束`;
@@ -274,14 +301,16 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
       const html = page.text;
       archiveRaw({ url, kind: "list", body: html, parserVersion: PARSER_VERSION });
 
+      // 每个列表只在它的首页累加一次总数，避免翻页过程中重复计数
       const pageTotal = parseListTotal(html);
-      if (pageTotal !== null && start === 0) {
+      if (pageTotal !== null && start === listStart) {
         totalSum += pageTotal;
         totalKnown = true;
       }
 
       const items = parseListPage(html);
       if (items.length === 0) break; // 翻到末页
+      const hasNext = parseHasNext(html);
 
       // 早停信号：这一页里出现了库里已有且元数据齐全的条目。
       // 不立刻跳出，是因为同页可能还夹着「匹配失败」待重试的条目，得一并处理掉。
@@ -302,19 +331,60 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
       // 增量轮：首页见到已知条目就说明后面只会更旧，不必再翻
       if (!full && sawKnown) break;
       if (pageTotal !== null && processed >= pageTotal) break;
-      if (items.length < LIST_PAGE_SIZE) break; // 不满一页即末页
+      // 末页判定以分页器的「后页」链接为准。
+      // 不满一页不能当末页——豆瓣在条目被删或转私密时会给出 14 条的中间页，
+      // 早期按短页退出导致列表被截断在 119 条（总数其实有 2198）。
+      if (hasNext === false) break;
+      if (hasNext === null && items.length < LIST_PAGE_SIZE) break;
     }
 
+    if (pausedAt !== null) break; // 出窗了，后面的列表留给下一轮
     if (blockedAtFirstPage) break; // 首页都不通，后面的列表同样抓不到
   }
 
-  // 完整跑完才记全量时间戳；中途被拦的话下周之前的常规轮仍是增量，不影响正确性
-  if (full && stopped === null) setSetting("douban.lastFullSyncAt", new Date().toISOString());
+  // 出窗暂停：记下断点，本轮标 partial 且不写全量时间戳，
+  // 于是下一轮仍是全量、读到游标从断点续跑。
+  // 但断点未必比已有游标更靠后：列表是按顺序抓的，若在「更靠前」的列表上撞墙
+  // （上一轮停在 watched:315，这一轮刚翻 wish 首页就到点），写进去会把
+  // watched 的进度冲掉，下次得从第 1 页重翻三百页。此时保留旧游标更划算。
+  // 列表顺序即序号，「靠前」= 序号更小。
+  if (pausedAt !== null) {
+    const pausedOrder = LISTS.findIndex((item) => item.status === pausedAt.status);
+    const cursorOrder = cursor === null ? -1 : LISTS.findIndex((item) => item.status === cursor.status);
+    if (pausedOrder >= cursorOrder) {
+      setSetting("douban.syncCursor", `${pausedAt.status}:${pausedAt.start}`);
+    }
+    const label = VIEW_STATUS_LABELS[pausedAt.status];
+    return failure(
+      stats,
+      `${mode}同步已抓 ${stats.itemsSeen} 条，到作息窗口结束，${label}列表中暂停，下次继续`,
+    );
+  }
 
-  const mode = full ? "全量" : "增量";
+  // 只有「整轮全量真的跑完」才清游标、记全量时间戳。
+  // 中途被豆瓣拒绝时两者都不动：时间戳不写，于是下一轮仍是全量，
+  // 剩下的条目马上就能再翻一遍，而不必等到一周后。
+  // 清游标只认全量轮：增量轮根本不会读游标，让它去改这个值只会平白毁掉别处的断点。
+  if (full && stopped === null) {
+    setSetting("douban.syncCursor", "");
+    setSetting("douban.lastFullSyncAt", new Date().toISOString());
+  }
+
   const summary = `${mode}同步共 ${stats.itemsSeen} 条（新增 ${stats.itemsNew} / 更新 ${stats.itemsUpdated}），错误 ${stats.errorCount} 条`;
   if (stopped) return failure(stats, stopped);
   return { ...stats, message: summary };
+}
+
+/**
+ * 解析断点游标 `<status>:<start>`。任何不合规的形状都返回 null（当作没有断点），
+ * 避免手工改库写坏值时让同步从莫名其妙的位置开始或直接抛错。
+ */
+function parseCursor(raw: string): { status: ViewStatus; start: number } | null {
+  const m = /^(wish|watching|watched):(\d+)$/.exec(raw);
+  if (!m) return null;
+  const start = Number(m[2]);
+  if (!Number.isInteger(start) || start < 0 || start > MAX_START) return null;
+  return { status: m[1] as ViewStatus, start };
 }
 
 /**
