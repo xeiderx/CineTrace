@@ -23,9 +23,18 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * TMDB API Key 取值。设置页填写的值优先，环境变量作兜底——
+ * 设置存在 SQLite 里，web 与 worker 共享同一个库，保存后无需重启容器。
+ */
+export function getTmdbKey(): string {
+  const fromSetting = String(getSetting("tmdb.apiKey") ?? "").trim();
+  return fromSetting || process.env.TMDB_API_KEY?.trim() || "";
+}
+
 /** 未配置 API Key 时匹配能力整体不可用，任务应尽早退回。 */
 export function hasTmdbKey(): boolean {
-  return Boolean(process.env.TMDB_API_KEY?.trim());
+  return Boolean(getTmdbKey());
 }
 
 /* -------------------------------------------------------------------------- */
@@ -99,7 +108,7 @@ export async function tmdb(
 ): Promise<TmdbSearchResponse> {
   const query = new URLSearchParams({
     language: String(getSetting("tmdb.language")),
-    api_key: process.env.TMDB_API_KEY ?? "",
+    api_key: getTmdbKey(),
     ...params,
   });
 
@@ -126,7 +135,7 @@ export async function tmdb(
 export async function tvSeasonExists(tvId: number, season: number): Promise<boolean> {
   const query = new URLSearchParams({
     language: String(getSetting("tmdb.language")),
-    api_key: process.env.TMDB_API_KEY ?? "",
+    api_key: getTmdbKey(),
   });
   try {
     const res = await fetch(`${TMDB_BASE}/tv/${tvId}/season/${season}?${query}`, {
@@ -228,7 +237,7 @@ export async function tmdbDetail(
 ): Promise<TmdbDetail | null> {
   const query = new URLSearchParams({
     language: String(getSetting("tmdb.language")),
-    api_key: process.env.TMDB_API_KEY ?? "",
+    api_key: getTmdbKey(),
     append_to_response: "credits,external_ids",
   });
 

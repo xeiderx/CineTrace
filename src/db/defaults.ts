@@ -22,6 +22,8 @@ export const DEFAULT_SETTINGS = {
   "sync.minDelayMs": 3000,
   "sync.maxDelayMs": 8000,
   "tmdb.language": "zh-CN",
+  /** TMDB API Key（v3）。设置页填写，优先于环境变量 TMDB_API_KEY */
+  "tmdb.apiKey": "",
   "ui.defaultRatingScale": 5,
 } as const;
 

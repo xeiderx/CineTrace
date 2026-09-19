@@ -10,6 +10,15 @@ const nextConfig: NextConfig = {
   env: {
     NEXT_PUBLIC_APP_VERSION: pkg.version,
   },
+  experimental: {
+    serverActions: {
+      /**
+       * 备份导入走 server action 上传文件，默认上限 1MB 对数据量大的库偏小，
+       * 调大以免导入时直接报「Body exceeded」而不是给出可读的错误。
+       */
+      bodySizeLimit: "32mb",
+    },
+  },
 };
 
 export default nextConfig;

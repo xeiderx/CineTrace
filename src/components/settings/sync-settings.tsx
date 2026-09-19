@@ -146,9 +146,34 @@ export function SyncSettings({
           </div>
         </div>
 
+        <div className="space-y-2 border-t border-border/60 pt-5">
+          <Label htmlFor="tmdb.apiKey">TMDB API Key</Label>
+          <Input
+            id="tmdb.apiKey"
+            name="tmdb.apiKey"
+            type="password"
+            defaultValue={str(initial["tmdb.apiKey"])}
+            placeholder="v3 API Key，如 245caecb…"
+            className="h-8 max-w-96"
+            autoComplete="off"
+          />
+          <p className="text-xs text-muted-foreground">
+            在{" "}
+            <a
+              href="https://www.themoviedb.org/settings/api"
+              target="_blank"
+              rel="noreferrer"
+              className="underline underline-offset-2"
+            >
+              TMDB 账号设置
+            </a>{" "}
+            申请 v3 Key。保存在数据库里，web 与 worker 共用，保存后即时生效、无需重启容器；
+            留空则回落到环境变量 <code>TMDB_API_KEY</code>。
+          </p>
+        </div>
+
         <p className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
-          匹配 TMDB 需要容器里配置环境变量 <code>TMDB_API_KEY</code>；缺失时
-          同步仍会抓取豆瓣数据，但条目的元数据匹配会被跳过。
+          未配置 Key 时同步仍会抓取豆瓣数据，但条目的元数据匹配会被跳过。
         </p>
 
         {state?.error ? (

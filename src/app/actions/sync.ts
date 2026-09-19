@@ -29,6 +29,8 @@ function int(formData: FormData, key: string): number | null {
 const CLOCK_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 /** 豆瓣 ID 可能是数字 ID，也可能是自定义字母 ID */
 const UID_RE = /^[A-Za-z0-9._-]+$/;
+/** TMDB v3 Key 是 32 位十六进制串，这里只做「不含空白/特殊字符」的粗校验 */
+const TMDB_KEY_RE = /^[A-Za-z0-9._-]+$/;
 
 const MIN_DELAY_FLOOR_MS = 500;
 const MAX_DELAY_CEIL_MS = 120_000;
@@ -77,12 +79,19 @@ export async function saveSyncSettingsAction(
     return { error: "启用同步前请先填写豆瓣 ID" };
   }
 
+  // 留空表示清掉库里的值，回落到环境变量 TMDB_API_KEY
+  const tmdbApiKey = text(formData, "tmdb.apiKey") ?? "";
+  if (tmdbApiKey && !TMDB_KEY_RE.test(tmdbApiKey)) {
+    return { error: "TMDB API Key 只能包含字母、数字、点、下划线或连字符" };
+  }
+
   setSetting("douban.uid", uid);
   setSetting("sync.enabled", enabled);
   setSetting("sync.windowStart", windowStart);
   setSetting("sync.windowEnd", windowEnd);
   setSetting("sync.minDelayMs", minDelayMs);
   setSetting("sync.maxDelayMs", maxDelayMs);
+  setSetting("tmdb.apiKey", tmdbApiKey);
 
   revalidatePath("/settings");
   return { ok: true };

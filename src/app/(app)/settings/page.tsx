@@ -1,9 +1,11 @@
 import type { Metadata } from "next";
 import { PageHeader } from "@/components/layout/page-header";
+import { BackupManager } from "@/components/settings/backup-manager";
 import { PlatformManager } from "@/components/settings/platform-manager";
 import { SyncSettings } from "@/components/settings/sync-settings";
 import { TagManager } from "@/components/settings/tag-manager";
 import { Separator } from "@/components/ui/separator";
+import { countPendingMetadata } from "@/lib/backup";
 import {
   listPlatforms,
   listTags,
@@ -35,6 +37,10 @@ export default function SettingsPage() {
         <Separator />
 
         <TagManager tags={tags} usage={tagUsage()} />
+
+        <Separator />
+
+        <BackupManager pendingMetadata={countPendingMetadata()} />
       </div>
     </>
   );
