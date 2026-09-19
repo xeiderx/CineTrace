@@ -70,43 +70,52 @@ export function getSyncCardsState(): SyncCardsState {
   const lastFullSyncAt = settingTime("douban.lastFullSyncAt");
   const lastManualIncAt = settingTime("douban.lastManualIncAt");
 
-  // 自动轮的放行条件（见 Scheduler.tick）：先满足 6 小时的 interval，
-  // 再落进作息窗口。已经逾期（例如 worker 停过一段）时用 now 兜底，
-  // 显示为「即将执行」而不是负数。
-  const base = lastFinishedAt ?? now;
+  // 下一轮自动同步在什么时候（见 Scheduler.tick）：每轮跑完起算 6 小时，
+  // 到点再看作息窗口；逾期时下一个 tick 立刻补跑。因此不能一律按
+  // 「上次结束 + 6h」算——从没跑过（worker 刚起来）和已逾期这两种情况，
+  // 下一轮都是「马上」，而不是 6 小时后。
+  let plannedRoundAt = now;
+  if (lastFinishedAt !== null) {
+    const due = lastFinishedAt + AUTO_SYNC_INTERVAL_MS;
+    plannedRoundAt = due > now ? due : now;
+  }
+  // 到点时若在窗口外，调度器会把它顺延到下一个释放点。真正开跑的是顺延后的
+  // 时刻，后面所有推算都得从它起算，否则会把「开窗前」的那段空等漏掉。
+  const nextRoundAt = deferIntoWindow(plannedRoundAt);
 
-  // 全量发生在哪一轮：调度时刻是「上次结束 + 6h」的整数倍，
-  // 所以真正跑全量的是「满 7 天之后的第一个 6 小时刻度」，而不是满 7 天那一刻。
-  // 直接取满 7 天的时刻会早报几小时、倒计时归零后干等，这里向上取整到刻度上。
-  //
-  // 从没全量过时不能拿 0 当起点——那会算出 1970 年的「已逾期」，
-  // 兜底成第 1 个刻度，跟增量撞在同一个时刻上。此处直接认定下一轮就是全量，
-  // 与 isFullSyncDue() 在 lastFullSyncAt 为空时返回 true 的判定保持一致。
-  const fullTicks =
-    lastFullSyncAt === null
-      ? 1
-      : Math.max(
-          1,
-          Math.ceil(
-            (lastFullSyncAt + FULL_SYNC_INTERVAL_MS - base) /
-              AUTO_SYNC_INTERVAL_MS,
-          ),
-        );
-  const fullDueAt = base + fullTicks * AUTO_SYNC_INTERVAL_MS;
+  /** 第 n 个 6 小时刻度（n 从 1 起）。每轮到点都会被顺延一次窗口，这里照做。 */
+  const tickAt = (n: number) =>
+    deferIntoWindow(nextRoundAt + n * AUTO_SYNC_INTERVAL_MS);
 
-  // 增量跑在「不做全量的那些轮」里。第 1 个刻度被全量占用时，增量要再等
-  // 一个刻度——否则两张卡指向同一时刻，既看不出差别，
-  // 也把「下一轮其实是全量」这件事说错了。
-  const incrementalDueAt =
-    base + (fullTicks === 1 ? 2 : 1) * AUTO_SYNC_INTERVAL_MS;
+  // 这一轮抓全量还是增量，取决于「跑它的那一刻距上次全量是否满一周」，
+  // 与 runDoubanSync 里的 isFullSyncDue() 是同一个判定。
+  const roundIsFull =
+    lastFullSyncAt === null ||
+    nextRoundAt - lastFullSyncAt >= FULL_SYNC_INTERVAL_MS;
+
+  // 这一轮不是全量时，往后数到第一个「满一周」的刻度，就是下次全量。
+  // 刻度是 6 小时的整数倍，所以真正跑全量的是「满 7 天之后的第一个刻度」，
+  // 而不是满 7 天那一刻——直接取满 7 天会早报几小时、倒计时归零后干等。
+  const ticksToFull = Math.max(
+    1,
+    Math.ceil(
+      ((lastFullSyncAt ?? 0) + FULL_SYNC_INTERVAL_MS - nextRoundAt) /
+        AUTO_SYNC_INTERVAL_MS,
+    ),
+  );
+
+  // 本轮是全量时，增量要往后让一个刻度——否则两张卡指向同一时刻，
+  // 既看不出差别，也把「下一轮其实是全量」这件事说错了。
+  const nextFullAuto = roundIsFull ? nextRoundAt : tickAt(ticksToFull);
+  const nextIncrementalAuto = roundIsFull ? tickAt(1) : nextRoundAt;
 
   return {
     now,
     running: isSyncRunning(now),
     configured:
       String(getSetting("douban.uid") ?? "").trim() !== "" && hasTmdbKey(),
-    nextIncrementalAutoAt: deferIntoWindow(Math.max(now, incrementalDueAt)),
-    nextFullAutoAt: deferIntoWindow(Math.max(now, fullDueAt)),
+    nextIncrementalAutoAt: nextIncrementalAuto,
+    nextFullAutoAt: nextFullAuto,
     manualFullReadyAt: (lastFullSyncAt ?? 0) + MANUAL_FULL_COOLDOWN_MS,
     manualIncrementalReadyAt: (lastManualIncAt ?? 0) + MANUAL_INC_COOLDOWN_MS,
   };
