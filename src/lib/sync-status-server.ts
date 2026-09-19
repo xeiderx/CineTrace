@@ -70,20 +70,35 @@ export function getSyncCardsState(): SyncCardsState {
   const lastFullSyncAt = settingTime("douban.lastFullSyncAt");
   const lastManualIncAt = settingTime("douban.lastManualIncAt");
 
-  // 自动轮的实际放行条件（见 Scheduler.tick）：先满足 6 小时的 interval，
+  // 自动轮的放行条件（见 Scheduler.tick）：先满足 6 小时的 interval，
   // 再落进作息窗口。已经逾期（例如 worker 停过一段）时用 now 兜底，
   // 显示为「即将执行」而不是负数。
   const base = lastFinishedAt ?? now;
-  const incrementalDueAt = base + AUTO_SYNC_INTERVAL_MS;
-  // 全量只会在某一轮自动轮里发生：调度是「上次结束 + 6h」的整数倍时刻，
+
+  // 全量发生在哪一轮：调度时刻是「上次结束 + 6h」的整数倍，
   // 所以真正跑全量的是「满 7 天之后的第一个 6 小时刻度」，而不是满 7 天那一刻。
-  // 直接取满 7 天的时刻会早报几小时，倒计时归零后干等——这里向上取整到刻度上。
-  const fullTarget = (lastFullSyncAt ?? 0) + FULL_SYNC_INTERVAL_MS;
-  const fullTicks = Math.max(
-    1,
-    Math.ceil((fullTarget - base) / AUTO_SYNC_INTERVAL_MS),
-  );
+  // 直接取满 7 天的时刻会早报几小时、倒计时归零后干等，这里向上取整到刻度上。
+  //
+  // 从没全量过时不能拿 0 当起点——那会算出 1970 年的「已逾期」，
+  // 兜底成第 1 个刻度，跟增量撞在同一个时刻上。此处直接认定下一轮就是全量，
+  // 与 isFullSyncDue() 在 lastFullSyncAt 为空时返回 true 的判定保持一致。
+  const fullTicks =
+    lastFullSyncAt === null
+      ? 1
+      : Math.max(
+          1,
+          Math.ceil(
+            (lastFullSyncAt + FULL_SYNC_INTERVAL_MS - base) /
+              AUTO_SYNC_INTERVAL_MS,
+          ),
+        );
   const fullDueAt = base + fullTicks * AUTO_SYNC_INTERVAL_MS;
+
+  // 增量跑在「不做全量的那些轮」里。第 1 个刻度被全量占用时，增量要再等
+  // 一个刻度——否则两张卡指向同一时刻，既看不出差别，
+  // 也把「下一轮其实是全量」这件事说错了。
+  const incrementalDueAt =
+    base + (fullTicks === 1 ? 2 : 1) * AUTO_SYNC_INTERVAL_MS;
 
   return {
     now,
