@@ -24,13 +24,12 @@ import {
   formatDate,
   formatDateRange,
   formatMinutes,
-  MATCH_STATUS_LABELS,
+  matchStatusLabel,
   mediaTypeLabel,
   parseCast,
   parseStringList,
   viewStatusLabel,
   viewStatusTone,
-  type MatchStatus,
 } from "@/lib/labels";
 import {
   getDefaultPlatform,
@@ -364,10 +363,7 @@ export default async function WorkDetailPage({
             />
             <InfoRow
               label="匹配"
-              value={
-                MATCH_STATUS_LABELS[item.matchStatus as MatchStatus] ??
-                item.matchStatus
-              }
+              value={matchStatusLabel(item.matchStatus, item.tmdbId)}
             />
           </div>
 

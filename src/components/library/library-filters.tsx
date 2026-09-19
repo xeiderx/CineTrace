@@ -14,27 +14,31 @@ import {
 } from "@/components/ui/select";
 import {
   MATCH_STATUS_LABELS,
+  MATCH_STATUS_ORDER,
   MEDIA_TYPE_LABELS,
-  UNBOUND_MATCH,
   VIEW_STATUS_LABELS,
   VIEW_STATUS_ORDER,
-  type MatchStatus,
 } from "@/lib/labels";
+import type { FacetItem } from "@/lib/queries";
 
 const ALL = "all";
 
-/** 「未绑定 TMDB」不是数据库里的状态，摆在状态项后面单独一档 */
-const MATCH_STATUS_ORDER: (MatchStatus | typeof UNBOUND_MATCH)[] = [
-  ...(Object.keys(MATCH_STATUS_LABELS) as MatchStatus[]),
-  UNBOUND_MATCH,
-];
-
-function matchStatusLabel(value: MatchStatus | typeof UNBOUND_MATCH): string {
-  return value === UNBOUND_MATCH ? "未绑定 TMDB" : MATCH_STATUS_LABELS[value];
+/** 下拉里带数量的选项文案，如「恐怖 (23)」 */
+function facetLabel(item: FacetItem): string {
+  return `${item.value} (${item.count})`;
 }
 
-/** 档案库筛选栏：搜索词与下拉条件全部体现在 URL 上，便于分享与刷新保持 */
-export function LibraryFilters() {
+/**
+ * 档案库筛选栏：搜索词与下拉条件全部体现在 URL 上，便于分享与刷新保持。
+ * 国家与类型两个下拉的取值来自库内实际分布，已按作品数由多到少排好。
+ */
+export function LibraryFilters({
+  countries,
+  genres,
+}: {
+  countries: FacetItem[];
+  genres: FacetItem[];
+}) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [pending, startTransition] = useTransition();
@@ -43,6 +47,8 @@ export function LibraryFilters() {
   const mediaType = searchParams.get("type") ?? ALL;
   const status = searchParams.get("status") ?? ALL;
   const matchStatus = searchParams.get("match") ?? ALL;
+  const country = searchParams.get("country") ?? ALL;
+  const genre = searchParams.get("genre") ?? ALL;
   const sort = searchParams.get("sort") ?? "recent";
 
   const [draft, setDraft] = useState(q);
@@ -70,6 +76,8 @@ export function LibraryFilters() {
     mediaType !== ALL ||
     status !== ALL ||
     matchStatus !== ALL ||
+    country !== ALL ||
+    genre !== ALL ||
     sort !== "recent";
 
   return (
@@ -105,11 +113,11 @@ export function LibraryFilters() {
       </form>
 
       <Select value={mediaType} onValueChange={(v) => apply({ type: v })}>
-        <SelectTrigger className="h-9 w-28" aria-label="类型筛选">
+        <SelectTrigger className="h-9 w-28" aria-label="媒体类型筛选">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value={ALL}>全部类型</SelectItem>
+          <SelectItem value={ALL}>全部媒体</SelectItem>
           {Object.entries(MEDIA_TYPE_LABELS).map(([value, label]) => (
             <SelectItem key={value} value={value}>
               {label}
@@ -133,14 +141,42 @@ export function LibraryFilters() {
       </Select>
 
       <Select value={matchStatus} onValueChange={(v) => apply({ match: v })}>
-        <SelectTrigger className="h-9 w-32" aria-label="匹配状态筛选">
+        <SelectTrigger className="h-9 w-28" aria-label="匹配状态筛选">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
           <SelectItem value={ALL}>全部匹配</SelectItem>
           {MATCH_STATUS_ORDER.map((value) => (
             <SelectItem key={value} value={value}>
-              {matchStatusLabel(value)}
+              {MATCH_STATUS_LABELS[value]}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+
+      <Select value={genre} onValueChange={(v) => apply({ genre: v })}>
+        <SelectTrigger className="h-9 w-32" aria-label="类型筛选">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={ALL}>全部类型</SelectItem>
+          {genres.map((item) => (
+            <SelectItem key={item.value} value={item.value}>
+              {facetLabel(item)}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+
+      <Select value={country} onValueChange={(v) => apply({ country: v })}>
+        <SelectTrigger className="h-9 w-32" aria-label="国家筛选">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={ALL}>全部国家</SelectItem>
+          {countries.map((item) => (
+            <SelectItem key={item.value} value={item.value}>
+              {facetLabel(item)}
             </SelectItem>
           ))}
         </SelectContent>

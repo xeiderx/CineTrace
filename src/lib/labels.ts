@@ -28,19 +28,30 @@ export const VIEW_STATUS_TONES: Record<ViewStatus, string> = {
 
 export const MATCH_STATUS_LABELS: Record<MatchStatus, string> = {
   matched: "已匹配",
-  manual: "手动指定",
+  manual: "自由添加",
   pending: "待匹配",
   failed: "匹配失败",
 };
 
 /**
- * 档案库筛选里的额外一项：没绑定 TMDB 的作品。
- *
- * 它不是 work.match_status 的取值——手填的冷门片状态同样是 manual，
- * 与「重新匹配」绑成功的混在一起，这里用 tmdb_id 判空把它们单独拎出来，
- * 方便 TMDB 日后收录了再回来重新匹配。
+ * 库内展示用的匹配状态顺序：已匹配 → 待匹配 → 匹配失败 → 自由添加。
+ * 「自由添加」是无 TMDB 数据的手工条目，排在最后。
  */
-export const UNBOUND_MATCH = "unbound";
+export const MATCH_STATUS_ORDER: MatchStatus[] = [
+  "matched",
+  "pending",
+  "failed",
+  "manual",
+];
+
+/**
+ * 匹配状态的展示文案。手动绑定但拿到了 TMDB 数据的直接算「已匹配」，
+ * 只有始终没有 TMDB 数据的手工条目才叫「自由添加」。
+ */
+export function matchStatusLabel(value: string, tmdbId: number | null): string {
+  if (value === "manual") return tmdbId == null ? "自由添加" : "已匹配";
+  return MATCH_STATUS_LABELS[value as MatchStatus] ?? value;
+}
 
 export const VIEW_STATUS_ORDER: ViewStatus[] = [
   "watched",

@@ -13,7 +13,12 @@ import { EmptyState } from "@/components/layout/empty-state";
 import { PageHeader } from "@/components/layout/page-header";
 import { Badge } from "@/components/ui/badge";
 import { formatDate, parseStringList } from "@/lib/labels";
-import { listWorks, type WorkFilters } from "@/lib/queries";
+import {
+  listCountryFacets,
+  listGenreFacets,
+  listWorks,
+  type WorkFilters,
+} from "@/lib/queries";
 
 export const metadata: Metadata = { title: "档案库" };
 
@@ -32,13 +37,25 @@ export default async function LibraryPage({
     mediaType: pick("type") ?? undefined,
     status: pick("status") ?? undefined,
     matchStatus: pick("match") ?? undefined,
+    country: pick("country") ?? undefined,
+    genre: pick("genre") ?? undefined,
     sort: (pick("sort") as WorkFilters["sort"]) ?? "recent",
   };
 
   const items = listWorks(filters);
   const hasAnyFilter = Boolean(
-    filters.q || filters.mediaType || filters.status || filters.matchStatus,
+    filters.q ||
+      filters.mediaType ||
+      filters.status ||
+      filters.matchStatus ||
+      filters.country ||
+      filters.genre,
   );
+
+  // 国家与类型下拉的候选项来自全库分布，不随当前筛选收窄，
+  // 免得筛完一项后其它选项消失、反而不好改条件
+  const countries = listCountryFacets();
+  const genres = listGenreFacets();
 
   return (
     <>
@@ -49,7 +66,7 @@ export default async function LibraryPage({
         <WorkSearchCreateDialog />
       </PageHeader>
 
-      <LibraryFilters />
+      <LibraryFilters countries={countries} genres={genres} />
 
       {items.length === 0 ? (
         <EmptyState

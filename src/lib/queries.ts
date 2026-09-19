@@ -1,4 +1,5 @@
-import { and, asc, desc, eq, inArray, isNull, like, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, like, or, sql } from "drizzle-orm";
+import type { AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 import { db } from "@/db";
 import {
   platform,
@@ -11,7 +12,6 @@ import {
   type ViewRecord,
   type Work,
 } from "@/db/schema";
-import { UNBOUND_MATCH } from "@/lib/labels";
 
 /* -------------------------------------------------------------------------- */
 /*                                  展示辅助                                    */
@@ -94,10 +94,48 @@ export type WorkFilters = {
   q?: string;
   mediaType?: string;
   status?: string;
-  /** 匹配状态；UNBOUND_MATCH 表示「没绑定 TMDB」 */
+  /** 匹配状态，取值同 work.match_status */
   matchStatus?: string;
+  /** 制片国家，精确匹配 countries 数组里的一项 */
+  country?: string;
+  /** 类型标签，精确匹配 genres 数组里的一项 */
+  genre?: string;
   sort?: "recent" | "rating" | "title" | "year";
 };
+
+/** 筛选项及其在库内的作品数，用于下拉里带上数量 */
+export type FacetItem = { value: string; count: number };
+
+/**
+ * JSON 数组列里是否含有某一项。
+ * 国家与类型存在 JSON 数组里，逐个 json_each 展开后再比对值，
+ * 比字符串 LIKE 可靠（不会把「中国」误匹配到「中国大陆」）。
+ */
+function jsonArrayHas(column: AnySQLiteColumn, value: string) {
+  return sql`exists (select 1 from json_each(${column}) where json_each.value = ${value})`;
+}
+
+/** 统计 JSON 数组列的取值分布，按作品数由多到少排序，数量相同按名称 */
+function jsonFacet(column: AnySQLiteColumn): FacetItem[] {
+  // 展开 JSON 数组要 cross join json_each，Drizzle 的 from 只收一张表，这里用原生 SQL
+  return db.all<FacetItem>(sql`
+    select json_each.value as value, count(*) as count
+    from ${work}, json_each(${column})
+    where json_each.value is not null
+    group by json_each.value
+    order by count desc, value asc
+  `);
+}
+
+/** 制片国家分布，供筛选下拉展示（已按数量降序） */
+export function listCountryFacets(): FacetItem[] {
+  return jsonFacet(work.countries);
+}
+
+/** 类型分布（恐怖、悬疑……），供筛选下拉展示（已按数量降序） */
+export function listGenreFacets(): FacetItem[] {
+  return jsonFacet(work.genres);
+}
 
 export type WorkListItem = Work & {
   viewCount: number;
@@ -149,13 +187,24 @@ export function listWorks(filters: WorkFilters = {}): WorkListItem[] {
   }
   if (filters.mediaType) conditions.push(eq(work.mediaType, filters.mediaType));
 
-  // 「未绑定 TMDB」按 tmdb_id 判空，与 match_status 无关：
-  // 手填的冷门片状态也是 manual，只有这条能把它们筛出来重新匹配
-  if (filters.matchStatus === UNBOUND_MATCH) {
-    conditions.push(isNull(work.tmdbId));
+  // 匹配状态分档与库里存的值不完全一一对应：
+  // 「已匹配」把手动绑定但拿到了 TMDB 数据的也收进来，「自由添加」只留没有 TMDB 数据的手工条目
+  if (filters.matchStatus === "matched") {
+    conditions.push(
+      or(
+        eq(work.matchStatus, "matched"),
+        and(eq(work.matchStatus, "manual"), isNotNull(work.tmdbId)),
+      ),
+    );
+  } else if (filters.matchStatus === "manual") {
+    conditions.push(and(eq(work.matchStatus, "manual"), isNull(work.tmdbId)));
   } else if (filters.matchStatus) {
     conditions.push(eq(work.matchStatus, filters.matchStatus));
   }
+
+  // 国家与类型存在 JSON 数组列里，用 json_each 展开后精确比对其中一项
+  if (filters.country) conditions.push(jsonArrayHas(work.countries, filters.country));
+  if (filters.genre) conditions.push(jsonArrayHas(work.genres, filters.genre));
 
   // 状态筛选作用于「是否看过某条记录」，用子查询表达更直观
   if (filters.status) {
