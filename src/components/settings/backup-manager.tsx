@@ -1,11 +1,14 @@
 "use client";
 
-import { useActionState, useState, useTransition } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Download, RefreshCw, Upload } from "lucide-react";
 import {
   backfillMetadataAction,
+  getBackfillProgressAction,
   importBackupAction,
   type BackupFormState,
+  type BackfillState,
 } from "@/app/actions/backup";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,51 +19,72 @@ type Props = {
   pendingMetadata: number;
 };
 
+/** 轮询间隔。补全进度只用于展示，没必要问得太勤。 */
+const POLL_MS = 1500;
+
 /**
  * 备份与恢复。
- * 导出走 /api/backup/export（浏览器直接下载），导入与元数据补全走 server action。
+ * 导出走 /api/backup/export（浏览器直接下载），导入走 server action。
+ * 元数据补全在服务端用 after() 后台执行，这里只负责发起与轮询进度——
+ * 所以补全期间可以随意切换页面，进度不会因为离开页面而中断。
  */
 export function BackupManager({ pendingMetadata }: Props) {
+  const router = useRouter();
   const [importState, importAction, importing] = useActionState<BackupFormState, FormData>(
     importBackupAction,
     undefined,
   );
 
-  // 补全结果只在本组件内消费，不必进 useActionState
-  const [backfilling, startBackfill] = useTransition();
-  const [backfillState, setBackfillState] = useState<BackupFormState>(undefined);
-  const [progress, setProgress] = useState<{ done: number; remaining: number } | null>(null);
-
-  // 选文件后把文件名显示出来，避免用户以为没选上
+  const [backfillState, setBackfillState] = useState<BackfillState | null>(null);
+  const [starting, setStarting] = useState(false);
   const [fileName, setFileName] = useState("");
 
-  /*
-   * 点一次就一直补到完。
-   * 服务端每批只处理 50 部就返回，是怕单个请求在 NAS 的 nginx 上超时
-   * （proxy_read_timeout 默认 60s），但让用户点几十遍太折磨人。分批因此不变，
-   * 改由前端循环触发：只要上一批还在推进就接着下一批。
-   * 中途失败或断网只会丢掉当前这一批，已写入的数据不受影响。
+  // 组件卸载后不再 setState，也不继续轮询（补全本身在服务端照跑）
+  const aliveRef = useRef(true);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+    };
+  }, []);
+
+  const running = backfillState?.running ?? false;
+
+  /**
+   * 点一次就补到完。
+   * 服务端立即返回并转后台执行，这里轮询到 running 变 false 为止。
+   * 中途切走页面只会丢掉轮询，服务端的补全不受影响。
    */
-  const runBackfill = () => {
-    startBackfill(async () => {
-      let done = 0;
-      setProgress(null);
+  const startBackfill = async () => {
+    setStarting(true);
+    try {
+      setBackfillState(await backfillMetadataAction());
+    } finally {
+      if (aliveRef.current) setStarting(false);
+    }
 
-      // 上限只是兜底，正常路径靠 remaining 归零退出
-      for (let round = 0; round < 200; round += 1) {
-        const state = await backfillMetadataAction();
-        setBackfillState(state);
+    while (aliveRef.current) {
+      await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+      if (!aliveRef.current) return;
 
-        // 报错、已补完、或一批下来一部都没成功（剩下的都在失败）就停
-        if (!state || state.error || state.remaining === 0 || !state.updated) break;
-
-        done += state.updated;
-        setProgress({ done, remaining: state.remaining ?? 0 });
+      const state = await getBackfillProgressAction();
+      if (!aliveRef.current) return;
+      setBackfillState(state);
+      if (!state.running) {
+        // 补完让服务端组件重新渲染，待补数量与海报才会更新
+        router.refresh();
+        return;
       }
-
-      setProgress(null);
-    });
+    }
   };
+
+  // 进入页面时若后台还在补，直接接上进度显示
+  useEffect(() => {
+    void (async () => {
+      const state = await getBackfillProgressAction();
+      if (aliveRef.current && state.running) setBackfillState(state);
+    })();
+  }, []);
 
   return (
     <div className="space-y-3">
@@ -143,22 +167,22 @@ export function BackupManager({ pendingMetadata }: Props) {
             <p className="text-xs text-muted-foreground">
               为导入后尚未同步过详情的作品拉取海报、简介、时长与分季结构。
               当前待补 <span className="font-medium text-foreground">{pendingMetadata}</span> 部，
-              点一次会自动补到完。
+              点一次会自动补到完，期间可以随意切换页面。
             </p>
           </div>
           <Button
             type="button"
             size="sm"
             variant="outline"
-            disabled={backfilling || pendingMetadata === 0}
-            onClick={runBackfill}
+            disabled={starting || running || (pendingMetadata === 0 && !running)}
+            onClick={() => void startBackfill()}
           >
-            <RefreshCw className={backfilling ? "animate-spin" : undefined} />
-            {backfilling
-              ? progress
-                ? `补全中 ${progress.done} 部…`
-                : "补全中…"
-              : "开始补全"}
+            <RefreshCw className={starting || running ? "animate-spin" : undefined} />
+            {starting
+              ? "启动中…"
+              : running
+                ? `补全中 ${backfillState?.done ?? 0}/${backfillState?.total ?? 0}…`
+                : "开始补全"}
           </Button>
         </div>
 
@@ -171,9 +195,9 @@ export function BackupManager({ pendingMetadata }: Props) {
           </p>
         ) : null}
 
-        {backfillState?.ok ? (
+        {backfillState && !backfillState.error && backfillState.message ? (
           <p className="rounded-md bg-primary/10 px-3 py-2 text-sm text-primary">
-            {backfillState.message ?? "补全完成。"}
+            {backfillState.message}
           </p>
         ) : null}
       </div>
