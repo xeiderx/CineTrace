@@ -5,8 +5,8 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { person, platform, tag, viewRecord, work, workTag } from "@/db/schema";
-import { getDefaultPlatform, posterUrl } from "@/lib/queries";
+import { person, platform, tag, viewRecord, work, workTag, type Person } from "@/db/schema";
+import { getDefaultPlatform, listWorksByCastId, posterUrl } from "@/lib/queries";
 import { mergeCast, parseCast } from "@/lib/labels";
 import { hasTmdbKey, searchTmdb, tmdbDetail, tmdbPerson } from "@/lib/tmdb";
 
@@ -268,51 +268,101 @@ export async function matchWorkToTmdbAction(
 /*                                 演员生平                                     */
 /* -------------------------------------------------------------------------- */
 
+/** 演员在库内参演的一部作品，海报地址已在服务端拼好 */
+export type PersonWorkItem = {
+  id: number;
+  title: string;
+  year: number | null;
+  posterUrl: string | null;
+};
+
 export type PersonProfile = {
   name: string;
   biography: string | null;
   birthday: string | null;
   placeOfBirth: string | null;
+  /** 这份资料的抓取日期，ISO 文本。界面据此提示新旧 */
+  updatedAt: string;
 };
 
-/** 简介缓存有效期：一个月。生平几乎不变，过期时间只防极少数被修正的错误 */
-const PERSON_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+/**
+ * 简介与库内作品分开返回：作品查的是本地库，
+ * 就算 TMDB 取不到简介（缺 Key、超时），参演作品照样能看。
+ */
+export type PersonDetailResult = {
+  profile: PersonProfile | null;
+  /** 取简介失败的原因；成功时为 null */
+  error: string | null;
+  works: PersonWorkItem[];
+};
+
+/** 简介缓存有效期：半年。生平几乎不变，过期只是防 TMDB 上偶尔被修正的错漏 */
+const PERSON_TTL_MS = 182 * 24 * 60 * 60 * 1000;
+
+/** 库内参演作品，顺带把海报地址拼好——客户端组件拿不到 posterUrl */
+function personWorks(personId: number): PersonWorkItem[] {
+  return listWorksByCastId(personId).map((w) => ({
+    ...w,
+    posterUrl: posterUrl(w.posterPath, "w185"),
+  }));
+}
+
+function toProfile(row: Person): PersonProfile {
+  return {
+    name: row.name,
+    biography: row.biography,
+    birthday: row.birthday,
+    placeOfBirth: row.placeOfBirth,
+    updatedAt: row.fetchedAt?.toISOString() ?? "",
+  };
+}
 
 /**
  * 取演员生平，供详情页点击头像时调用。
  *
  * 先查 person 表——同一个演员在多部作品里出现很常见，
- * 缓存住就不必每次点开都发一次请求。未命中或缓存过期才走 TMDB，
- * 拉到的结果顺手落库（失败不写，留待下次重试）。
+ * 缓存住就不必每次点开都发一次请求。未命中或超过半年才走 TMDB，
+ * 拉到的结果顺手落库。
+ *
+ * `force` 为手动「重新获取」，跳过缓存直接重拉。
  */
 export async function getPersonProfileAction(
   personId: number,
-): Promise<PersonProfile | { error: string }> {
+  force = false,
+): Promise<PersonDetailResult> {
   if (!Number.isInteger(personId) || personId <= 0) {
-    return { error: "无效的演员 ID" };
+    return { profile: null, error: "无效的演员 ID", works: [] };
   }
 
+  const works = personWorks(personId);
   const cached = db.select().from(person).where(eq(person.tmdbPersonId, personId)).get();
-  if (cached?.fetchedAt && Date.now() - cached.fetchedAt.getTime() < PERSON_TTL_MS) {
-    return {
-      name: cached.name,
-      biography: cached.biography,
-      birthday: cached.birthday,
-      placeOfBirth: cached.placeOfBirth,
-    };
+
+  const fresh = cached?.fetchedAt && Date.now() - cached.fetchedAt.getTime() < PERSON_TTL_MS;
+  if (cached && fresh && !force) {
+    return { profile: toProfile(cached), error: null, works };
   }
 
-  if (!hasTmdbKey()) return { error: "未配置 TMDB API Key，无法获取简介" };
+  // 已有缓存时，任何失败都退化成「照旧展示」——总好过把抓来的资料吞掉
+  const fallback = cached
+    ? { profile: toProfile(cached), error: null, works }
+    : null;
+
+  if (!hasTmdbKey()) {
+    return fallback ?? { profile: null, error: "未配置 TMDB API Key，无法获取简介", works };
+  }
 
   const fetched = await tmdbPerson(personId);
-  if (!fetched) return { error: "获取简介失败，请稍后重试" };
+  if (!fetched) {
+    return fallback ?? { profile: null, error: "获取简介失败，请稍后重试", works };
+  }
 
+  const now = new Date();
   const values = {
     name: fetched.name,
     biography: fetched.biography,
     birthday: fetched.birthday,
     placeOfBirth: fetched.placeOfBirth,
-    fetchedAt: new Date(),
+    fetchedAt: now,
   };
 
   db.insert(person)
@@ -321,10 +371,15 @@ export async function getPersonProfileAction(
     .run();
 
   return {
-    name: fetched.name,
-    biography: fetched.biography,
-    birthday: fetched.birthday,
-    placeOfBirth: fetched.placeOfBirth,
+    profile: {
+      name: fetched.name,
+      biography: fetched.biography,
+      birthday: fetched.birthday,
+      placeOfBirth: fetched.placeOfBirth,
+      updatedAt: now.toISOString(),
+    },
+    error: null,
+    works,
   };
 }
 

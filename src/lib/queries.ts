@@ -429,6 +429,39 @@ export type RecentWatch = {
   work: Work | null;
 };
 
+/* -------------------------------------------------------------------------- */
+/*                               演员的库内作品                                 */
+/* -------------------------------------------------------------------------- */
+
+export type PersonWork = {
+  id: number;
+  title: string;
+  year: number | null;
+  posterPath: string | null;
+};
+
+/**
+ * 某位演员在你库里参演过的作品，按年份倒序。
+ *
+ * `work.cast` 是 JSON 数组，用 json_each 展开后按 person id 比对。
+ * 老格式（纯姓名数组）没有 id，自然匹配不上——那些本来也拿不到头像。
+ */
+export function listWorksByCastId(personId: number): PersonWork[] {
+  return db
+    .select({
+      id: work.id,
+      title: work.title,
+      year: work.year,
+      posterPath: work.posterPath,
+    })
+    .from(work)
+    .where(
+      sql`exists (select 1 from json_each(${work.cast}) where json_extract(json_each.value, '$.id') = ${personId})`,
+    )
+    .orderBy(desc(work.year), asc(work.title))
+    .all();
+}
+
 /** 最近观看：概览页的时间线 */
 export function listRecentWatches(limit = 8): RecentWatch[] {
   return db
