@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNotNull, isNull, like, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, like, or, sql } from "drizzle-orm";
 import type { AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 import { db } from "@/db";
 import {
@@ -258,7 +258,7 @@ export function listWorks(filters: WorkFilters = {}): WorkListItem[] {
     return {
       ...w,
       viewCount: own.length,
-      watchCount: own.filter((r) => r.status === "watched").length,
+      watchCount: own.filter((r) => r.watchedAt != null || r.status === "watched").length,
       lastWatchedAt: latest?.watchedAt ?? null,
       latestStatus: latest?.status ?? null,
       latestRating: latest?.rating ?? null,
@@ -427,7 +427,8 @@ export type OverviewStats = {
 export function getOverviewStats(): OverviewStats {
   const workCount = countWorks();
 
-  // 只统计「看过」：想看/在看还没真正看完，混进来会把记录数与累计时长撑大
+  // 「有看过日期就算数」：状态后来被豆瓣改回「想看」的记录，那天确实看过的历史仍然成立，
+  // 不能因为状态变了就把这一笔从记录数和累计时长里抹掉。
   const rows = db
     .select({
       rating: viewRecord.rating,
@@ -439,7 +440,7 @@ export function getOverviewStats(): OverviewStats {
     })
     .from(viewRecord)
     .leftJoin(work, eq(work.id, viewRecord.workId))
-    .where(eq(viewRecord.status, "watched"))
+    .where(or(eq(viewRecord.status, "watched"), isNotNull(viewRecord.watchedAt)))
     .all();
 
   let totalMinutes = 0;
@@ -524,13 +525,17 @@ export function listWorksByCastId(personId: number): PersonWork[] {
     .all();
 }
 
-/** 最近观看：概览页的时间线。「想看」只是标记，不算观看，排除掉 */
+/**
+ * 最近观看：概览页的时间线。
+ * 「想看」如果从没看过（没日期）只是标记，不该出现在观看时间线里；
+ * 但状态被改回「想看」的旧记录保留着看过日期，那天确实看过，照常列出。
+ */
 export function listRecentWatches(limit = 8): RecentWatch[] {
   return db
     .select({ record: viewRecord, work })
     .from(viewRecord)
     .leftJoin(work, eq(work.id, viewRecord.workId))
-    .where(ne(viewRecord.status, "wish"))
+    .where(or(eq(viewRecord.status, "watched"), isNotNull(viewRecord.watchedAt)))
     .orderBy(desc(viewRecord.watchedAt), desc(viewRecord.id))
     .limit(limit)
     .all();

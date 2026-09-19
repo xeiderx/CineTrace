@@ -172,7 +172,7 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
 
     const sourceKey = `douban:${doubanId}`;
     const existingRecord = db
-      .select({ id: viewRecord.id, workId: viewRecord.workId })
+      .select({ id: viewRecord.id, workId: viewRecord.workId, watchedAt: viewRecord.watchedAt })
       .from(viewRecord)
       .where(eq(viewRecord.sourceKey, sourceKey))
       .get();
@@ -193,14 +193,21 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
     }
 
     const season = parseSeasonNumber(titleCn);
+    // 豆瓣三个列表互斥，把「看过」改成「想看」时条目会离开 collect 列表。
+    // 状态跟豆瓣走，但原有的看过日期不能被这次改动抹掉——那是真实看过的时间，
+    // 以后二刷三刷还要靠它回溯。所以非「看过」的列表只在记录还没有日期时才写入。
+    const keepWatchedAt = status !== "watched" && existingRecord?.watchedAt != null;
     const values = {
       workId,
       source: "douban",
       sourceItemId: doubanId,
       status,
-      // 「在看」页的日期是「开始看」，写 startedAt 才不会被概览时间线当成看完；
-      // 想看/看过写的都是标记日期
-      ...(status === "watching" ? { startedAt: item.markedAt } : { watchedAt: item.markedAt }),
+      // 「在看」页的日期是「开始看」，写 startedAt 才不会被概览时间线当成看完
+      ...(status === "watching"
+        ? { startedAt: item.markedAt }
+        : keepWatchedAt
+          ? {}
+          : { watchedAt: item.markedAt }),
       // 想看/在看页没有评分，null 不能拿去覆盖用户已有的评分
       ...(status === "watched" || item.rating !== null ? { rating: item.rating } : {}),
       ...(item.comment !== null ? { comment: item.comment } : {}),

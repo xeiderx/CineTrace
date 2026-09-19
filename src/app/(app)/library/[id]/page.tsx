@@ -311,7 +311,7 @@ export default async function WorkDetailPage({
               mediaType={item.mediaType}
               year={item.year}
               status={latest?.status ?? null}
-              watchCount={records.filter((r) => r.status === "watched").length}
+              watchCount={records.filter((r) => r.watchedAt != null || r.status === "watched").length}
               country={countries[0] ?? null}
             />
           </div>
