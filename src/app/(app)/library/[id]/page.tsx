@@ -7,6 +7,7 @@ import {
   deleteWorkAction,
 } from "@/app/actions/library";
 import { ConfirmDeleteButton } from "@/components/library/confirm-delete-button";
+import { CastWall, type CastPortrait } from "@/components/library/cast-wall";
 import { ViewRecordDialog } from "@/components/library/view-record-dialog";
 import { WorkFormDialog } from "@/components/library/work-form-dialog";
 import { WorkMatchDialog } from "@/components/library/work-match-dialog";
@@ -25,6 +26,7 @@ import {
   formatMinutes,
   MATCH_STATUS_LABELS,
   mediaTypeLabel,
+  parseCast,
   parseStringList,
   viewStatusLabel,
   viewStatusTone,
@@ -237,8 +239,19 @@ export default async function WorkDetailPage({
     : null;
 
   const genres = parseStringList(item.genres);
+  const countries = parseStringList(item.countries);
   const directors = parseStringList(item.directors);
-  const cast = parseStringList(item.cast);
+  const cast = parseCast(item.cast);
+
+  // 头像地址在这里拼好：客户端组件不引入连着数据库的 queries 模块
+  const castPortraits: CastPortrait[] = cast
+    .filter((c): c is typeof c & { id: number } => c.id !== null)
+    .map((c) => ({
+      id: c.id,
+      name: c.name,
+      character: c.character,
+      profileUrl: posterUrl(c.profilePath, "w185"),
+    }));
 
   const externalIds = [
     item.tmdbId ? `TMDB ${item.tmdbId}` : null,
@@ -296,6 +309,7 @@ export default async function WorkDetailPage({
               year={item.year}
               status={latest?.status ?? null}
               watchCount={records.filter((r) => r.status === "watched").length}
+              country={countries[0] ?? null}
             />
           </div>
 
@@ -334,8 +348,15 @@ export default async function WorkDetailPage({
 
           <div className="space-y-2 border-t border-border/60 pt-4">
             <InfoRow label="类型" value={genres.join(" / ")} />
+            <InfoRow label="国家" value={countries.join(" / ")} />
             <InfoRow label="导演" value={directors.join(" / ")} />
-            <InfoRow label="主演" value={cast.join(" / ")} />
+            {/* 有 TMDB 头像时主演交给下方演员墙，只有手动录入的才退化成文字行 */}
+            {castPortraits.length === 0 ? (
+              <InfoRow
+                label="主演"
+                value={cast.map((c) => c.name).join(" / ")}
+              />
+            ) : null}
             <InfoRow label="上映" value={formatDate(item.releaseDate, "")} />
             <InfoRow
               label="编号"
@@ -360,6 +381,18 @@ export default async function WorkDetailPage({
           ) : null}
         </div>
       </div>
+
+      {castPortraits.length > 0 ? (
+        <section className="mt-10">
+          <div className="mb-4 flex items-center justify-between gap-4">
+            <h2 className="text-lg font-semibold">主演</h2>
+            <p className="text-xs text-muted-foreground">
+              点头像看简介
+            </p>
+          </div>
+          <CastWall cast={castPortraits} />
+        </section>
+      ) : null}
 
       {seasons.length > 0 ? (
         <section className="mt-10">

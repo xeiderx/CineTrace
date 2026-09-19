@@ -215,7 +215,9 @@ async function fillOne(row: {
       releaseDate: detail.releaseDate,
       imdbId: detail.imdbId,
       genres: JSON.stringify(detail.genres),
+      countries: JSON.stringify(detail.countries),
       directors: JSON.stringify(detail.directors),
+      cast: JSON.stringify(detail.cast),
       // 剧集年份取第一季首播年，与同步任务保持一致
       ...(isTv && firstSeasonYear != null ? { year: firstSeasonYear } : {}),
       metadataSyncedAt: new Date(),

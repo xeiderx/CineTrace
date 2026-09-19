@@ -82,11 +82,14 @@ export function WorkMetaBadges({
   year,
   status,
   watchCount,
+  country,
 }: {
   mediaType: string;
   year: number | null;
   status: string | null;
   watchCount: number;
+  /** 制片国家，列表里只展示第一个，多了卡片放不下 */
+  country?: string | null;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-1.5">
@@ -95,6 +98,9 @@ export function WorkMetaBadges({
       </Badge>
       {year ? (
         <span className="text-xs text-muted-foreground">{year}</span>
+      ) : null}
+      {country ? (
+        <span className="truncate text-xs text-muted-foreground">{country}</span>
       ) : null}
       {status ? (
         <span

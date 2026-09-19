@@ -260,13 +260,19 @@ type IssueReporter = (
 /**
  * 元数据是否已补齐、无需再调 TMDB。
  * 匹配失败的条目不算完成——策略修好后要能自动重试；
- * 剧集还要求 seasons_json 非空，以便旧数据补上季结构。
+ * 剧集还要求 seasons_json 非空，以便旧数据补上季结构；
+ * 国家与主演是后加的字段，旧数据两者皆空，这里一并要求，
+ * 否则这一轮同步不会去补，界面上就永远看不到。
+ * 判「两者皆空」而非「任一为空」：都填过一次就不再重拉，
+ * 免得某部片恰好没有其中一个字段时每轮都白跑一趟 TMDB。
  */
 function isMetadataComplete(row: typeof work.$inferSelect | undefined): boolean {
   if (!row) return false;
   if (row.matchStatus !== "matched" && row.matchStatus !== "manual") return false;
   if (!row.metadataSyncedAt) return false;
   if (row.mediaType === "tv" && row.tmdbId !== null && row.seasonsJson === "[]") return false;
+  // 国家与主演都空 ⇒ 是老数据（当年还不抓这两项），需要重拉一次
+  if (row.countries === "[]" && row.cast === "[]") return false;
   return true;
 }
 
@@ -368,9 +374,11 @@ function buildWorkValues(
     releaseDate: detail?.releaseDate ?? tmdb?.releaseDate ?? null,
     imdbId: detail?.imdbId ?? null,
     genres: JSON.stringify(detail?.genres ?? []),
-    countries: JSON.stringify(item.country ? [item.country] : []),
+    // 豆瓣列表页的国家解析常年不稳，TMDB 有结果时以它为准，豆瓣仅兜底
+    countries: JSON.stringify(detail?.countries?.length ? detail.countries : item.country ? [item.country] : []),
     languages: "[]",
     directors: JSON.stringify(detail?.directors ?? []),
+    cast: JSON.stringify(detail?.cast ?? []),
     matchStatus: hit ? "matched" : "failed",
     matchStrategy: hit?.strategy ?? null,
     matchScore: hit?.score ?? failedScore,

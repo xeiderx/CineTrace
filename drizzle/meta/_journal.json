@@ -15,6 +15,13 @@
       "when": 1789775850732,
       "tag": "0001_dry_scarlet_spider",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1789800883796,
+      "tag": "0002_medical_meteorite",
+      "breakpoints": true
     }
   ]
 }

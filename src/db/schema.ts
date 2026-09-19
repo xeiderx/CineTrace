@@ -143,6 +143,34 @@ export const work = sqliteTable(
 );
 
 /* -------------------------------------------------------------------------- */
+/*                            人物（演员简介缓存）                              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * TMDB 人物简介缓存。`work.cast` 里只存姓名与头像路径，
+ * 详细的生平要另调 `/person/{id}` 才有——点了头像才抓，抓过就落这里，
+ * 避免同一个演员被反复请求（也避免一次性抓上千个用不上的简介）。
+ */
+export const person = sqliteTable(
+  "person",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    /** TMDB person id，跨作品复用的键 */
+    tmdbPersonId: integer("tmdb_person_id").notNull().unique(),
+    name: text("name").notNull(),
+    biography: text("biography"),
+    birthday: text("birthday"),
+    /** 出生地，TMDB 只给英文 */
+    placeOfBirth: text("place_of_birth"),
+    /** 最近一次拉取时间，便于日后过期刷新 */
+    fetchedAt: integer("fetched_at", { mode: "timestamp" }),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+);
+
+/* -------------------------------------------------------------------------- */
 /*                        观影流水（view_record：行为层）                       */
 /* -------------------------------------------------------------------------- */
 
@@ -494,3 +522,4 @@ export type CollectionItem = typeof collectionItem.$inferSelect;
 export type SyncRun = typeof syncRun.$inferSelect;
 export type SyncIssue = typeof syncIssue.$inferSelect;
 export type Setting = typeof setting.$inferSelect;
+export type Person = typeof person.$inferSelect;

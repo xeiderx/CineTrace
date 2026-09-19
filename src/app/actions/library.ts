@@ -5,9 +5,10 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { platform, tag, viewRecord, work, workTag } from "@/db/schema";
+import { person, platform, tag, viewRecord, work, workTag } from "@/db/schema";
 import { getDefaultPlatform, posterUrl } from "@/lib/queries";
-import { hasTmdbKey, searchTmdb, tmdbDetail } from "@/lib/tmdb";
+import { mergeCast, parseCast } from "@/lib/labels";
+import { hasTmdbKey, searchTmdb, tmdbDetail, tmdbPerson } from "@/lib/tmdb";
 
 export type FormState = { error?: string; ok?: boolean } | undefined;
 
@@ -85,8 +86,9 @@ export async function createWorkAction(
       doubanId: text(formData, "doubanId"),
       tmdbId: int(formData, "tmdbId"),
       genres: JSON.stringify(list(formData, "genres")),
+      countries: JSON.stringify(list(formData, "countries")),
       directors: JSON.stringify(list(formData, "directors")),
-      cast: JSON.stringify(list(formData, "cast")),
+      cast: JSON.stringify(mergeCast([], list(formData, "cast"))),
       // 手动录入即视为人工确认，不参与自动匹配流程
       matchStatus: "manual",
       matchStrategy: "manual",
@@ -109,6 +111,8 @@ export async function updateWorkAction(
   const title = required(formData, "title");
   if (!title) return { error: "请填写片名" };
 
+  const current = db.select().from(work).where(eq(work.id, id)).get();
+
   db.update(work)
     .set({
       title,
@@ -125,8 +129,10 @@ export async function updateWorkAction(
       doubanId: text(formData, "doubanId"),
       tmdbId: int(formData, "tmdbId"),
       genres: JSON.stringify(list(formData, "genres")),
+      countries: JSON.stringify(list(formData, "countries")),
       directors: JSON.stringify(list(formData, "directors")),
-      cast: JSON.stringify(list(formData, "cast")),
+      // 表单只输入姓名，头像与 person id 从旧记录按姓名贴回，避免编辑时被冲掉
+      cast: JSON.stringify(mergeCast(parseCast(current?.cast), list(formData, "cast"))),
     })
     .where(eq(work.id, id))
     .run();
@@ -242,7 +248,9 @@ export async function matchWorkToTmdbAction(
       releaseDate: detail.releaseDate,
       imdbId: detail.imdbId,
       genres: JSON.stringify(detail.genres),
+      countries: JSON.stringify(detail.countries),
       directors: JSON.stringify(detail.directors),
+      cast: JSON.stringify(detail.cast),
       ...(isTv && firstSeasonYear != null ? { year: firstSeasonYear } : {}),
       // 人工确认的结果不参与后续自动匹配
       matchStatus: "manual",
@@ -254,6 +262,70 @@ export async function matchWorkToTmdbAction(
 
   refreshLibrary(id);
   return { ok: true, message: "已重新绑定，元数据已更新" };
+}
+
+/* -------------------------------------------------------------------------- */
+/*                                 演员生平                                     */
+/* -------------------------------------------------------------------------- */
+
+export type PersonProfile = {
+  name: string;
+  biography: string | null;
+  birthday: string | null;
+  placeOfBirth: string | null;
+};
+
+/** 简介缓存有效期：一个月。生平几乎不变，过期时间只防极少数被修正的错误 */
+const PERSON_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * 取演员生平，供详情页点击头像时调用。
+ *
+ * 先查 person 表——同一个演员在多部作品里出现很常见，
+ * 缓存住就不必每次点开都发一次请求。未命中或缓存过期才走 TMDB，
+ * 拉到的结果顺手落库（失败不写，留待下次重试）。
+ */
+export async function getPersonProfileAction(
+  personId: number,
+): Promise<PersonProfile | { error: string }> {
+  if (!Number.isInteger(personId) || personId <= 0) {
+    return { error: "无效的演员 ID" };
+  }
+
+  const cached = db.select().from(person).where(eq(person.tmdbPersonId, personId)).get();
+  if (cached?.fetchedAt && Date.now() - cached.fetchedAt.getTime() < PERSON_TTL_MS) {
+    return {
+      name: cached.name,
+      biography: cached.biography,
+      birthday: cached.birthday,
+      placeOfBirth: cached.placeOfBirth,
+    };
+  }
+
+  if (!hasTmdbKey()) return { error: "未配置 TMDB API Key，无法获取简介" };
+
+  const fetched = await tmdbPerson(personId);
+  if (!fetched) return { error: "获取简介失败，请稍后重试" };
+
+  const values = {
+    name: fetched.name,
+    biography: fetched.biography,
+    birthday: fetched.birthday,
+    placeOfBirth: fetched.placeOfBirth,
+    fetchedAt: new Date(),
+  };
+
+  db.insert(person)
+    .values({ tmdbPersonId: personId, ...values })
+    .onConflictDoUpdate({ target: person.tmdbPersonId, set: values })
+    .run();
+
+  return {
+    name: fetched.name,
+    biography: fetched.biography,
+    birthday: fetched.birthday,
+    placeOfBirth: fetched.placeOfBirth,
+  };
 }
 
 /** 为作品挂上标签。已存在的标签直接复用，否则新建 */

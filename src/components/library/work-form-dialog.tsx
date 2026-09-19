@@ -27,7 +27,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { MEDIA_TYPE_LABELS } from "@/lib/labels";
+import { MEDIA_TYPE_LABELS, parseCast } from "@/lib/labels";
 import type { Work } from "@/db/schema";
 
 /** 把 JSON 数组列还原成逗号分隔文本，供表单编辑 */
@@ -39,6 +39,13 @@ function joinList(value: string | null | undefined): string {
   } catch {
     return "";
   }
+}
+
+/** 主演列是对象数组，表单里只编辑姓名，这里只取 name */
+function joinCast(value: string | null | undefined): string {
+  return parseCast(value)
+    .map((c) => c.name)
+    .join("、");
 }
 
 /**
@@ -232,6 +239,16 @@ export function WorkFormDialog({ work }: { work?: Work }) {
             </div>
 
             <div className="space-y-2 sm:col-span-2">
+              <Label htmlFor="countries">制片国家</Label>
+              <Input
+                id="countries"
+                name="countries"
+                defaultValue={joinList(work?.countries)}
+                placeholder="中国大陆、美国（用逗号或顿号分隔）"
+              />
+            </div>
+
+            <div className="space-y-2 sm:col-span-2">
               <Label htmlFor="directors">导演</Label>
               <Input
                 id="directors"
@@ -246,7 +263,7 @@ export function WorkFormDialog({ work }: { work?: Work }) {
               <Input
                 id="cast"
                 name="cast"
-                defaultValue={joinList(work?.cast)}
+                defaultValue={joinCast(work?.cast)}
                 placeholder="用逗号或顿号分隔"
               />
             </div>

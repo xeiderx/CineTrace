@@ -1,4 +1,4 @@
-import { and, count, eq, isNotNull, isNull } from "drizzle-orm";
+import { and, count, eq, isNotNull, isNull, or } from "drizzle-orm";
 import { db } from "@/db";
 import {
   collection,
@@ -514,12 +514,29 @@ export function importBackup(file: BackupFile): ImportStats {
 /*                              元数据补全统计                                 */
 /* -------------------------------------------------------------------------- */
 
-/** 待补 TMDB 元数据的作品数：有 tmdbId 但从没同步过详情。 */
+/**
+ * 待补 TMDB 元数据的作品：有 tmdbId，但要么从没同步过详情，
+ * 要么国家与主演都还是空的。
+ *
+ * 后一条是为存量数据准备的——它们当年同步过，那时还不抓这两个字段，
+ * 只按 metadata_synced_at 判会永远漏掉。用「且」而非「或」：
+ * 只要同步过一次就会填上至少一项，不会因为某部片恰好没有其中一个字段
+ * 而在每次同步里被反复重拉。
+ */
+const pendingMetadataWhere = and(
+  isNotNull(work.tmdbId),
+  or(
+    isNull(work.metadataSyncedAt),
+    and(eq(work.countries, "[]"), eq(work.cast, "[]")),
+  ),
+);
+
+/** 待补 TMDB 元数据的作品数。 */
 export function countPendingMetadata(): number {
   return db
     .select({ n: count() })
     .from(work)
-    .where(and(isNotNull(work.tmdbId), isNull(work.metadataSyncedAt)))
+    .where(pendingMetadataWhere)
     .get()?.n ?? 0;
 }
 
@@ -528,7 +545,7 @@ export function listPendingMetadata(limit = 200): { id: number; mediaType: strin
   return db
     .select({ id: work.id, mediaType: work.mediaType, tmdbId: work.tmdbId, title: work.title })
     .from(work)
-    .where(and(isNotNull(work.tmdbId), isNull(work.metadataSyncedAt)))
+    .where(pendingMetadataWhere)
     .limit(limit)
     .all()
     .map((row) => ({ id: row.id, mediaType: row.mediaType, tmdbId: row.tmdbId as number, title: row.title }));

@@ -182,7 +182,29 @@ type TmdbRawDetail = {
   external_ids?: { imdb_id?: string | null };
   genres?: { name?: string }[];
   created_by?: { name?: string }[];
-  credits?: { crew?: { job?: string; name?: string }[] };
+  /** 制片国家。name 未必随 language 本地化，故同时取 iso_3166_1 做兜底翻译 */
+  production_countries?: { iso_3166_1?: string; name?: string }[];
+  credits?: {
+    crew?: { job?: string; name?: string }[];
+    cast?: TmdbRawCastMember[];
+  };
+};
+
+type TmdbRawCastMember = {
+  id?: number;
+  name?: string;
+  character?: string;
+  profile_path?: string | null;
+  order?: number;
+};
+
+/** TMDB `/person/{id}`。简介只有这个接口才有，credits 里不带。 */
+type TmdbRawPerson = {
+  id?: number;
+  name?: string;
+  biography?: string | null;
+  birthday?: string | null;
+  place_of_birth?: string | null;
 };
 
 /**
@@ -199,6 +221,19 @@ export type TmdbSeason = {
   voteAverage: number | null;
 };
 
+/**
+ * 一位主创/演员。`profilePath` 是 TMDB 图床相对路径，
+ * 展示时用 posterUrl 拼域名；简介不在这里，要点开时才按 id 单拉。
+ */
+export type TmdbCastMember = {
+  /** TMDB person id，用于取简介 */
+  id: number;
+  name: string;
+  /** 饰演角色，可能为空（尤其是剧集） */
+  character: string | null;
+  profilePath: string | null;
+};
+
 export type TmdbDetail = {
   /** 分钟：电影为片长，剧集为单集时长 */
   runtime: number | null;
@@ -206,6 +241,10 @@ export type TmdbDetail = {
   imdbId: string | null;
   genres: string[];
   directors: string[];
+  /** 制片国家，已尽量译为中文 */
+  countries: string[];
+  /** 主演，按 TMDB 给出的番位排序，已截到 CAST_LIMIT */
+  cast: TmdbCastMember[];
   /** 整剧海报，剧集不用季海报 */
   posterPath: string | null;
   /** 总季数 / 总集数，仅剧集有 */
@@ -217,6 +256,69 @@ export type TmdbDetail = {
   overview: string | null;
   originalTitle: string | null;
 };
+
+/**
+ * 演员表截断长度。TMDB 的 credits.cast 按番位排好序，
+ * 一部剧动辄上百人，取前若干位即可覆盖「主演」的含义。
+ */
+const CAST_LIMIT = 12;
+
+/**
+ * ISO 3166-1 → 中文名。TMDB 的 `production_countries[].name` 不随
+ * language 参数本地化（稳定返回英文），所以用国家码查这张表，
+ * 比直接存 "United States of America" 更符合界面语言。
+ * 未收录的国家码退回 TMDB 给的原文。
+ */
+const COUNTRY_NAMES: Record<string, string> = {
+  CN: "中国大陆", HK: "中国香港", TW: "中国台湾", MO: "中国澳门",
+  US: "美国", JP: "日本", KR: "韩国", KP: "朝鲜",
+  GB: "英国", FR: "法国", DE: "德国", IT: "意大利", ES: "西班牙",
+  PT: "葡萄牙", NL: "荷兰", BE: "比利时", LU: "卢森堡", IE: "爱尔兰",
+  CH: "瑞士", AT: "奥地利", SE: "瑞典", NO: "挪威", DK: "丹麦",
+  FI: "芬兰", IS: "冰岛", PL: "波兰", CZ: "捷克", SK: "斯洛伐克",
+  HU: "匈牙利", RO: "罗马尼亚", BG: "保加利亚", GR: "希腊", HR: "克罗地亚",
+  RS: "塞尔维亚", SI: "斯洛文尼亚", BA: "波黑", MK: "北马其顿", AL: "阿尔巴尼亚",
+  EE: "爱沙尼亚", LV: "拉脱维亚", LT: "立陶宛", UA: "乌克兰", BY: "白俄罗斯",
+  RU: "俄罗斯", GE: "格鲁吉亚", AM: "亚美尼亚", AZ: "阿塞拜疆", KZ: "哈萨克斯坦",
+  UZ: "乌兹别克斯坦", MN: "蒙古", TH: "泰国", VN: "越南", SG: "新加坡",
+  MY: "马来西亚", PH: "菲律宾", ID: "印度尼西亚", KH: "柬埔寨", LA: "老挝",
+  MM: "缅甸", BN: "文莱", IN: "印度", PK: "巴基斯坦", BD: "孟加拉国",
+  LK: "斯里兰卡", NP: "尼泊尔", IR: "伊朗", TR: "土耳其", IL: "以色列",
+  SA: "沙特阿拉伯", AE: "阿联酋", QA: "卡塔尔", KW: "科威特", LB: "黎巴嫩",
+  JO: "约旦", IQ: "伊拉克", SY: "叙利亚", CA: "加拿大", AU: "澳大利亚",
+  NZ: "新西兰", MX: "墨西哥", BR: "巴西", AR: "阿根廷", CL: "智利",
+  CO: "哥伦比亚", PE: "秘鲁", VE: "委内瑞拉", EC: "厄瓜多尔", BO: "玻利维亚",
+  PY: "巴拉圭", UY: "乌拉圭", CR: "哥斯达黎加", PA: "巴拿马", GT: "危地马拉",
+  DO: "多米尼加", PR: "波多黎各", CU: "古巴", JM: "牙买加", ZA: "南非",
+  EG: "埃及", MA: "摩洛哥", TN: "突尼斯", DZ: "阿尔及利亚", KE: "肯尼亚",
+  NG: "尼日利亚", GH: "加纳", ET: "埃塞俄比亚", TZ: "坦桑尼亚", UG: "乌干达",
+  ZW: "津巴布韦", SN: "塞内加尔", CI: "科特迪瓦", CM: "喀麦隆",
+};
+
+/** 把 TMDB 的制片国家译成中文，未收录的退回原文。 */
+function normalizeCountries(raw: TmdbRawDetail["production_countries"]): string[] {
+  const out: string[] = [];
+  for (const c of raw ?? []) {
+    const code = c.iso_3166_1?.toUpperCase() ?? "";
+    const name = (code && COUNTRY_NAMES[code]) || c.name?.trim() || "";
+    if (name && !out.includes(name)) out.push(name);
+  }
+  return out;
+}
+
+/** 只保留有 person id 的演员——没有 id 就取不到简介，展示价值有限。 */
+function normalizeCast(raw: TmdbRawCastMember[] | undefined): TmdbCastMember[] {
+  return (raw ?? [])
+    .filter((c) => typeof c.id === "number" && Boolean(c.name?.trim()))
+    .sort((a, b) => (a.order ?? 999) - (b.order ?? 999))
+    .slice(0, CAST_LIMIT)
+    .map((c) => ({
+      id: c.id as number,
+      name: (c.name as string).trim(),
+      character: c.character?.trim() || null,
+      profilePath: c.profile_path ?? null,
+    }));
+}
 
 /** 季结构的原始字段容错：缺 season_number 的条目直接丢掉。 */
 function normalizeSeasons(raw: TmdbRawSeason[] | undefined): TmdbSeason[] {
@@ -244,7 +346,7 @@ export async function tmdbDetail(
   tmdbId: number,
 ): Promise<TmdbDetail | null> {
   const { data: body } = await requestTmdb<TmdbRawDetail>(`${mediaType}/${tmdbId}`, {
-    append_to_response: "credits,external_ids",
+    append_to_response: "credits,external_ids,production_countries",
   });
   if (!body) return null;
 
@@ -266,12 +368,44 @@ export async function tmdbDetail(
     imdbId: (isTv ? body.external_ids?.imdb_id : body.imdb_id) || null,
     genres: (body.genres ?? []).map((g) => g.name ?? "").filter(Boolean),
     directors,
+    countries: normalizeCountries(body.production_countries),
+    cast: normalizeCast(body.credits?.cast),
     posterPath: body.poster_path ?? null,
     seasonCount: isTv ? body.number_of_seasons ?? null : null,
     episodeCount: isTv ? body.number_of_episodes ?? null : null,
     seasons: isTv ? normalizeSeasons(body.seasons) : [],
     overview: body.overview?.trim() || null,
     originalTitle: (isTv ? body.original_name : body.original_title)?.trim() || null,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/*                                  人物简介                                   */
+/* -------------------------------------------------------------------------- */
+
+export type TmdbPerson = {
+  tmdbPersonId: number;
+  name: string;
+  biography: string | null;
+  birthday: string | null;
+  placeOfBirth: string | null;
+};
+
+/**
+ * 拉一位演员的生平。`credits` 里只有姓名和头像，简介必须单独请求，
+ * 因此调用方务必先查 person 表的缓存——只在缓存未命中时才走到这里。
+ * 失败返回 null，让界面退化成「暂无简介」而不是报错。
+ */
+export async function tmdbPerson(personId: number): Promise<TmdbPerson | null> {
+  const { data: body } = await requestTmdb<TmdbRawPerson>(`person/${personId}`);
+  if (!body || typeof body.id !== "number") return null;
+
+  return {
+    tmdbPersonId: body.id,
+    name: body.name?.trim() || "",
+    biography: body.biography?.trim() || null,
+    birthday: body.birthday?.trim() || null,
+    placeOfBirth: body.place_of_birth?.trim() || null,
   };
 }
 

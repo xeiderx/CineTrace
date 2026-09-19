@@ -12,7 +12,7 @@ import {
 import { EmptyState } from "@/components/layout/empty-state";
 import { PageHeader } from "@/components/layout/page-header";
 import { Badge } from "@/components/ui/badge";
-import { formatDate } from "@/lib/labels";
+import { formatDate, parseStringList } from "@/lib/labels";
 import { listWorks, type WorkFilters } from "@/lib/queries";
 
 export const metadata: Metadata = { title: "档案库" };
@@ -99,6 +99,7 @@ export default async function LibraryPage({
                       year={item.year}
                       status={item.latestStatus}
                       watchCount={item.watchCount}
+                      country={parseStringList(item.countries)[0] ?? null}
                     />
                     {progress ? (
                       <p className="text-xs text-muted-foreground">{progress}</p>
