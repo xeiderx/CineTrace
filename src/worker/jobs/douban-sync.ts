@@ -14,7 +14,7 @@ import {
   type MatchHit,
   type TmdbDetail,
 } from "@/lib/tmdb";
-import type { Job, JobResult } from "../job";
+import { runJob, type Job, type JobResult } from "../job";
 import { sleep, throttle } from "../throttle";
 
 /**
@@ -50,156 +50,195 @@ function collectUrl(uid: string, start: number): string {
   return `${DOUBAN_ORIGIN}/people/${encodeURIComponent(uid)}/collect?sort=time&start=${start}`;
 }
 
+export type DoubanSyncProgress = {
+  /** 已处理的条目数 */
+  seen: number;
+  /** 列表页声明的总数，解析不到时为 null */
+  total: number | null;
+};
+
+type DoubanSyncOptions = {
+  /** 手动同步时忽略 sync.enabled 总开关 */
+  force?: boolean;
+  onProgress?: (progress: DoubanSyncProgress) => void;
+};
+
 export const doubanSyncJob: Job = {
   name: "douban-sync",
   kind: "douban-html",
   intervalMs: 6 * 60 * 60 * 1000,
   // 2100 条记录分页抓取耗时较长，锁的存活时间给足
   lockTtlMs: 30 * 60 * 1000,
-  async run() {
-    if (!getSetting("sync.enabled")) {
-      return { message: "同步开关已关闭，跳过" };
-    }
-    const uid = String(getSetting("douban.uid") ?? "").trim();
-    if (!uid) {
-      return { partial: true, message: "未配置豆瓣用户 ID，跳过抓取" };
-    }
-    if (!hasTmdbKey()) {
-      return { partial: true, message: "未配置 TMDB_API_KEY，无法匹配作品元数据" };
-    }
-
-    const stats = { itemsSeen: 0, itemsNew: 0, itemsUpdated: 0, errorCount: 0 };
-
-    /** 记录一条可复现的错误，供设置页排查。reason 取值受表约束限制。 */
-    const issue = (
-      reason: "no_match" | "low_score" | "network" | "parse" | "blocked",
-      refId: string | null,
-      title: string | null,
-      detail: string,
-    ) => {
-      stats.errorCount += 1;
-      db.insert(syncIssue)
-        .values({
-          kind: "douban-html",
-          refId,
-          title,
-          reason,
-          detail: detail.slice(0, 500),
-        })
-        .run();
-    };
-
-    /** 处理列表页的一条条目：匹配 → 补 TMDB 详情 → 落库。 */
-    const processItem = async (item: ListPageItem) => {
-      stats.itemsSeen += 1;
-      const { doubanId, titleCn } = item;
-      if (!doubanId) {
-        issue("parse", null, titleCn, "列表页条目缺少 subject id");
-        return;
-      }
-
-      const sourceKey = `douban:${doubanId}`;
-      const existingRecord = db
-        .select({ id: viewRecord.id, workId: viewRecord.workId })
-        .from(viewRecord)
-        .where(eq(viewRecord.sourceKey, sourceKey))
-        .get();
-
-      // 条目当前指向的作品：优先记录上挂着的 work，其次按豆瓣 id 直接找。
-      // 多季条目只有「代表季」的 id 落在 work.doubanId 上，其余靠记录关联。
-      const linkedWork =
-        (existingRecord?.workId != null
-          ? db.select().from(work).where(eq(work.id, existingRecord.workId)).get()
-          : undefined) ?? db.select().from(work).where(eq(work.doubanId, doubanId)).get();
-
-      let workId = linkedWork?.id ?? null;
-
-      // 手动绑定的条目不再自动改写；元数据已齐的条目跳过 TMDB 调用
-      if (linkedWork?.matchStatus !== "manual" && !isMetadataComplete(linkedWork)) {
-        const resolved = await resolveWork(item, issue);
-        if (resolved !== null) workId = resolved;
-      }
-
-      const season = parseSeasonNumber(titleCn);
-      const values = {
-        workId,
-        source: "douban",
-        sourceItemId: doubanId,
-        status: "watched" as const,
-        watchedAt: item.markedAt,
-        rating: item.rating,
-        comment: item.comment,
-        // 豆瓣一季一条记录，季号落在记录上，详情页据此按季展示；
-        // 标题里没有季标识的条目不写，避免覆盖手工填的进度
-        ...(season !== null ? { progressSeason: season } : {}),
-      };
-
-      // sourceKey 上的唯一索引保证重跑只更新不新增
-      db.insert(viewRecord)
-        .values({ sourceKey, ...values })
-        .onConflictDoUpdate({ target: viewRecord.sourceKey, set: values })
-        .run();
-
-      if (existingRecord) stats.itemsUpdated += 1;
-      else stats.itemsNew += 1;
-    };
-
-    /* ------------------------------ 抓取主循环 ------------------------------ */
-
-    // 预热：先拿到 bid 等基础 Cookie，首屏直接请求容易被判为异常流量
-    await req(`${DOUBAN_ORIGIN}/`);
-
-    const firstUrl = collectUrl(uid, 0);
-    const first = await req(firstUrl);
-    if (first.status !== 200 || isBlocked(first.text) || needsLogin(first.text)) {
-      issue("blocked", null, null, `列表页首页不可用 status=${first.status}`);
-      return failure(stats, "豆瓣拒绝访问（首页即受限），本轮中止");
-    }
-
-    const total = parseCollectTotal(first.text);
-    let html = first.text;
-    let processed = 0;
-    let start = 0;
-    let stopped: string | null = null;
-
-    while (start <= MAX_START) {
-      const url = collectUrl(uid, start);
-      if (start > 0) {
-        await sleep(PAGE_GAP_MS);
-        const page = await req(url);
-        if (page.status !== 200 || isBlocked(page.text) || needsLogin(page.text)) {
-          issue("blocked", null, null, `列表页第 ${start / COLLECT_PAGE_SIZE + 1} 页受限 status=${page.status}`);
-          stopped = `列表页第 ${start / COLLECT_PAGE_SIZE + 1} 页起被拒绝访问，本轮提前结束`;
-          break;
-        }
-        html = page.text;
-      }
-
-      archiveRaw({ url, kind: "list", body: html, parserVersion: PARSER_VERSION });
-
-      const items = parseListPage(html);
-      if (items.length === 0) break; // 翻到末页
-
-      for (const item of items) {
-        try {
-          await processItem(item);
-        } catch (error) {
-          // 单条失败不应中断整轮同步
-          issue("parse", item.doubanId, item.titleCn, error instanceof Error ? error.message : String(error));
-        }
-      }
-
-      processed += items.length;
-      start += COLLECT_PAGE_SIZE;
-      if (total !== null && processed >= total) break;
-      if (items.length < COLLECT_PAGE_SIZE) break; // 不满一页即末页
-    }
-
-    const summary = `共 ${stats.itemsSeen} 条（新增 ${stats.itemsNew} / 更新 ${stats.itemsUpdated}），错误 ${stats.errorCount} 条`;
-    if (stopped) return failure(stats, stopped, start);
-    return { ...stats, cursor: String(start), message: summary };
-  },
+  run: () => runDoubanSync(),
 };
+
+/**
+ * 手动同步入口。与定时任务共用锁名与 kind——两者是同一件事，必须互斥；
+ * 手动跑完同样会写 sync_run，因此也能作为下次定时的计时起点。
+ * 返回 ran=false 表示锁被 worker 抢走了（它正在同步），没有真的执行。
+ */
+export async function runManualDoubanSync(
+  onProgress: (progress: DoubanSyncProgress) => void,
+): Promise<{ ran: boolean; result: JobResult | null }> {
+  let result: JobResult | null = null;
+  const job: Job = {
+    ...doubanSyncJob,
+    run: async () => {
+      result = await runDoubanSync({ force: true, onProgress });
+      return result;
+    },
+  };
+  return { ran: await runJob(job), result };
+}
+
+/**
+ * 抓取一轮豆瓣「我看过的」并落库。定时任务与手动同步共用此实现，
+ * 差别只在是否受总开关约束、以及要不要对外汇报进度。
+ */
+async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult> {
+  if (!options.force && !getSetting("sync.enabled")) {
+    return { message: "同步开关已关闭，跳过" };
+  }
+  const uid = String(getSetting("douban.uid") ?? "").trim();
+  if (!uid) {
+    return { partial: true, message: "未配置豆瓣用户 ID，跳过抓取" };
+  }
+  if (!hasTmdbKey()) {
+    return { partial: true, message: "未配置 TMDB_API_KEY，无法匹配作品元数据" };
+  }
+
+  const stats = { itemsSeen: 0, itemsNew: 0, itemsUpdated: 0, errorCount: 0 };
+
+  /** 记录一条可复现的错误，供设置页排查。reason 取值受表约束限制。 */
+  const issue = (
+    reason: "no_match" | "low_score" | "network" | "parse" | "blocked",
+    refId: string | null,
+    title: string | null,
+    detail: string,
+  ) => {
+    stats.errorCount += 1;
+    db.insert(syncIssue)
+      .values({
+        kind: "douban-html",
+        refId,
+        title,
+        reason,
+        detail: detail.slice(0, 500),
+      })
+      .run();
+  };
+
+  /** 处理列表页的一条条目：匹配 → 补 TMDB 详情 → 落库。 */
+  const processItem = async (item: ListPageItem) => {
+    stats.itemsSeen += 1;
+    const { doubanId, titleCn } = item;
+    if (!doubanId) {
+      issue("parse", null, titleCn, "列表页条目缺少 subject id");
+      return;
+    }
+
+    const sourceKey = `douban:${doubanId}`;
+    const existingRecord = db
+      .select({ id: viewRecord.id, workId: viewRecord.workId })
+      .from(viewRecord)
+      .where(eq(viewRecord.sourceKey, sourceKey))
+      .get();
+
+    // 条目当前指向的作品：优先记录上挂着的 work，其次按豆瓣 id 直接找。
+    // 多季条目只有「代表季」的 id 落在 work.doubanId 上，其余靠记录关联。
+    const linkedWork =
+      (existingRecord?.workId != null
+        ? db.select().from(work).where(eq(work.id, existingRecord.workId)).get()
+        : undefined) ?? db.select().from(work).where(eq(work.doubanId, doubanId)).get();
+
+    let workId = linkedWork?.id ?? null;
+
+    // 手动绑定的条目不再自动改写；元数据已齐的条目跳过 TMDB 调用
+    if (linkedWork?.matchStatus !== "manual" && !isMetadataComplete(linkedWork)) {
+      const resolved = await resolveWork(item, issue);
+      if (resolved !== null) workId = resolved;
+    }
+
+    const season = parseSeasonNumber(titleCn);
+    const values = {
+      workId,
+      source: "douban",
+      sourceItemId: doubanId,
+      status: "watched" as const,
+      watchedAt: item.markedAt,
+      rating: item.rating,
+      comment: item.comment,
+      // 豆瓣一季一条记录，季号落在记录上，详情页据此按季展示；
+      // 标题里没有季标识的条目不写，避免覆盖手工填的进度
+      ...(season !== null ? { progressSeason: season } : {}),
+    };
+
+    // sourceKey 上的唯一索引保证重跑只更新不新增
+    db.insert(viewRecord)
+      .values({ sourceKey, ...values })
+      .onConflictDoUpdate({ target: viewRecord.sourceKey, set: values })
+      .run();
+
+    if (existingRecord) stats.itemsUpdated += 1;
+    else stats.itemsNew += 1;
+  };
+
+  /* ------------------------------ 抓取主循环 ------------------------------ */
+
+  // 预热：先拿到 bid 等基础 Cookie，首屏直接请求容易被判为异常流量
+  await req(`${DOUBAN_ORIGIN}/`);
+
+  const firstUrl = collectUrl(uid, 0);
+  const first = await req(firstUrl);
+  if (first.status !== 200 || isBlocked(first.text) || needsLogin(first.text)) {
+    issue("blocked", null, null, `列表页首页不可用 status=${first.status}`);
+    return failure(stats, "豆瓣拒绝访问（首页即受限），本轮中止");
+  }
+
+  const total = parseCollectTotal(first.text);
+  let html = first.text;
+  let processed = 0;
+  let start = 0;
+  let stopped: string | null = null;
+
+  while (start <= MAX_START) {
+    const url = collectUrl(uid, start);
+    if (start > 0) {
+      await sleep(PAGE_GAP_MS);
+      const page = await req(url);
+      if (page.status !== 200 || isBlocked(page.text) || needsLogin(page.text)) {
+        issue("blocked", null, null, `列表页第 ${start / COLLECT_PAGE_SIZE + 1} 页受限 status=${page.status}`);
+        stopped = `列表页第 ${start / COLLECT_PAGE_SIZE + 1} 页起被拒绝访问，本轮提前结束`;
+        break;
+      }
+      html = page.text;
+    }
+
+    archiveRaw({ url, kind: "list", body: html, parserVersion: PARSER_VERSION });
+
+    const items = parseListPage(html);
+    if (items.length === 0) break; // 翻到末页
+
+    for (const item of items) {
+      try {
+        await processItem(item);
+      } catch (error) {
+        // 单条失败不应中断整轮同步
+        issue("parse", item.doubanId, item.titleCn, error instanceof Error ? error.message : String(error));
+      }
+    }
+
+    processed += items.length;
+    options.onProgress?.({ seen: stats.itemsSeen, total });
+    start += COLLECT_PAGE_SIZE;
+    if (total !== null && processed >= total) break;
+    if (items.length < COLLECT_PAGE_SIZE) break; // 不满一页即末页
+  }
+
+  const summary = `共 ${stats.itemsSeen} 条（新增 ${stats.itemsNew} / 更新 ${stats.itemsUpdated}），错误 ${stats.errorCount} 条`;
+  if (stopped) return failure(stats, stopped, start);
+  return { ...stats, cursor: String(start), message: summary };
+}
 
 /* -------------------------------------------------------------------------- */
 /*                            单条条目的元数据解析                             */

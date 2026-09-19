@@ -1,7 +1,10 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { setSetting } from "@/lib/settings";
+import { after } from "next/server";
+import { getSetting, setSetting } from "@/lib/settings";
+import { hasTmdbKey } from "@/lib/tmdb";
+import { runManualDoubanSync } from "@/worker/jobs/douban-sync";
 
 export type FormState = { error?: string; ok?: boolean } | undefined;
 
@@ -95,4 +98,94 @@ export async function saveSyncSettingsAction(
 
   revalidatePath("/settings");
   return { ok: true };
+}
+
+/* -------------------------------------------------------------------------- */
+/*                                  立即同步                                    */
+/* -------------------------------------------------------------------------- */
+
+export type ManualSyncState = {
+  error?: string;
+  /** 是否仍在抓取 */
+  running: boolean;
+  /** 已处理条目数 */
+  seen: number;
+  /** 豆瓣声明的总数，未解析到或尚未开始时为 null */
+  total: number | null;
+  message?: string;
+};
+
+type ManualSyncProgress = {
+  running: boolean;
+  seen: number;
+  total: number | null;
+  message?: string;
+};
+
+/**
+ * 手动同步进度同样只放 web 进程内存：任务由 after() 在本进程继续跑，
+ * 前端轮询同一进程即可。（与补全进度同理，重启只丢进度显示。）
+ */
+let manualSync: ManualSyncProgress | null = null;
+
+function manualSyncSnapshot(): ManualSyncState {
+  if (!manualSync) {
+    return { running: false, seen: 0, total: null };
+  }
+  return {
+    running: manualSync.running,
+    seen: manualSync.seen,
+    total: manualSync.total,
+    message: manualSync.message,
+  };
+}
+
+/**
+ * 立即抓取一轮豆瓣。绕过 sync.enabled 总开关——用户手动点按钮就是明确的意图。
+ * 与 worker 的定时任务共用同一把锁，撞上时直接告知而不是排队等待。
+ * 抓取耗时可达十几分钟，因此和补全一样交给 after() 在响应结束后跑，
+ * 期间页面导航不会被挂住。
+ */
+export async function startManualSyncAction(): Promise<ManualSyncState> {
+  if (manualSync?.running) return manualSyncSnapshot();
+
+  const uid = String(getSetting("douban.uid") ?? "").trim();
+  if (!uid) {
+    return { error: "请先填写豆瓣 ID 并保存", running: false, seen: 0, total: null };
+  }
+  if (!hasTmdbKey()) {
+    return { error: "请先填写 TMDB API Key 并保存", running: false, seen: 0, total: null };
+  }
+
+  const progress: ManualSyncProgress = { running: true, seen: 0, total: null };
+  manualSync = progress;
+  after(() => runManualSync(progress));
+
+  return manualSyncSnapshot();
+}
+
+/** 前端轮询手动同步进度。 */
+export async function getManualSyncProgressAction(): Promise<ManualSyncState> {
+  return manualSyncSnapshot();
+}
+
+async function runManualSync(progress: ManualSyncProgress): Promise<void> {
+  try {
+    const { ran, result } = await runManualDoubanSync((p) => {
+      progress.seen = p.seen;
+      progress.total = p.total;
+    });
+
+    if (!ran) {
+      progress.message = "worker 正在同步，等它跑完再试。";
+      return;
+    }
+    progress.message = result?.message ?? "同步结束。";
+    // 抓取会改动作品与观影记录，整棵路由树失效最省心
+    revalidatePath("/", "layout");
+  } catch (error) {
+    progress.message = `同步中断：${error instanceof Error ? error.message : String(error)}`;
+  } finally {
+    progress.running = false;
+  }
 }

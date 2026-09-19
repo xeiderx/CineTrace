@@ -1,10 +1,14 @@
 "use client";
 
-import { useActionState, useState } from "react";
-import { Save } from "lucide-react";
+import { useActionState, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { RefreshCw, Save } from "lucide-react";
 import {
+  getManualSyncProgressAction,
   saveSyncSettingsAction,
+  startManualSyncAction,
   type FormState,
+  type ManualSyncState,
 } from "@/app/actions/sync";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,15 +24,20 @@ function num(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
+/** 手动同步的轮询间隔 */
+const POLL_MS = 3000;
+
 /**
  * 豆瓣同步配置。这里只负责「怎么抓」，
- * 抓取动作本身由 worker 容器按 6 小时周期执行。
+ * 抓取动作本身由 worker 容器按 6 小时周期执行，
+ * 也可以点「立即同步」手动跑一轮（绕过自动同步开关与作息窗口）。
  */
 export function SyncSettings({
   initial,
 }: {
   initial: Record<string, unknown>;
 }) {
+  const router = useRouter();
   const [enabled, setEnabled] = useState(initial["sync.enabled"] === true);
 
   const [state, formAction, pending] = useActionState<FormState, FormData>(
@@ -36,13 +45,63 @@ export function SyncSettings({
     undefined,
   );
 
+  const [syncState, setSyncState] = useState<ManualSyncState | null>(null);
+  const [starting, setStarting] = useState(false);
+
+  // 组件卸载后不再 setState，也不继续轮询（同步本身在服务端照跑）
+  const aliveRef = useRef(true);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+    };
+  }, []);
+
+  const running = syncState?.running ?? false;
+
+  /**
+   * 手动立刻抓一轮。服务端立即返回并转后台执行，这里轮询到 running 变 false 为止；
+   * 中途切走页面只会丢掉轮询，抓取不受影响。
+   */
+  const startSync = async () => {
+    setStarting(true);
+    try {
+      setSyncState(await startManualSyncAction());
+    } finally {
+      if (aliveRef.current) setStarting(false);
+    }
+
+    while (aliveRef.current) {
+      await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+      if (!aliveRef.current) return;
+
+      const next = await getManualSyncProgressAction();
+      if (!aliveRef.current) return;
+      setSyncState(next);
+      if (!next.running) {
+        // 同步会改动作品与记录，让服务端组件重新渲染
+        router.refresh();
+        return;
+      }
+    }
+  };
+
+  // 进入页面时若后台还在同步，直接接上进度显示
+  useEffect(() => {
+    void (async () => {
+      const next = await getManualSyncProgressAction();
+      if (aliveRef.current && next.running) setSyncState(next);
+    })();
+  }, []);
+
   return (
     <div className="space-y-3">
       <div>
         <h2 className="text-base font-medium">豆瓣同步</h2>
         <p className="text-xs text-muted-foreground">
           抓取豆瓣「我看过的」列表，逐条匹配 TMDB 元数据后写入媒体库。worker
-          容器每 6 小时执行一次，重复抓取不会产生重复记录。
+          容器每 6 小时执行一次，重复抓取不会产生重复记录；也可以点「立即同步」
+          手动跑一轮。
         </p>
       </div>
 
@@ -187,16 +246,45 @@ export function SyncSettings({
 
         {state?.ok ? (
           <p className="rounded-md bg-primary/10 px-3 py-2 text-sm text-primary">
-            已保存。下次 worker 调度时生效。
+            已保存。定时同步按新的设置执行。
           </p>
         ) : null}
 
-        <div className="flex justify-end">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={starting || running}
+            onClick={() => void startSync()}
+          >
+            <RefreshCw className={starting || running ? "animate-spin" : undefined} />
+            {starting
+              ? "启动中…"
+              : running
+                ? `同步中 ${syncState?.seen ?? 0}${syncState?.total ? `/${syncState.total}` : ""}…`
+                : "立即同步"}
+          </Button>
           <Button type="submit" size="sm" disabled={pending}>
             <Save />
             {pending ? "保存中…" : "保存设置"}
           </Button>
         </div>
+
+        {syncState?.error ? (
+          <p
+            role="alert"
+            className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive"
+          >
+            {syncState.error}
+          </p>
+        ) : null}
+
+        {syncState && !syncState.error && syncState.message ? (
+          <p className="rounded-md bg-primary/10 px-3 py-2 text-sm text-primary">
+            {syncState.message}
+          </p>
+        ) : null}
       </form>
     </div>
   );

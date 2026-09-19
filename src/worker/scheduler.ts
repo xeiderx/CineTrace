@@ -1,3 +1,6 @@
+import { and, desc, eq, isNotNull } from "drizzle-orm";
+import { db } from "@/db";
+import { syncRun } from "@/db/schema";
 import { isWithinWindow } from "./throttle";
 import { runJob, type Job } from "./job";
 
@@ -7,7 +10,10 @@ const TICK_MS = 30_000;
 type ScheduledJob = Job & {
   /** 受作息窗口与总开关约束的任务（即所有对外抓取任务） */
   windowed?: boolean;
-  /** 上次执行结束的时间戳，仅进程内可见 */
+  /**
+   * 上次执行结束的时间戳。启动时从 sync_run 表读回，之后仅进程内更新——
+   * 否则每次进程重启都会立刻重跑一轮，开发期频繁重建就等于持续抓取。
+   */
   lastFinishedAt?: number;
 };
 
@@ -29,13 +35,38 @@ export class Scheduler {
   start(): void {
     if (this.timer) return;
     this.timer = setInterval(() => void this.tick(), TICK_MS);
-    // 启动后立即跑一轮，不必等第一个 tick
-    void this.tick();
+    // 先从数据库读回各任务的计时起点，再跑第一轮
+    void this.seed().then(() => this.tick());
   }
 
   stop(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+  }
+
+  /**
+   * 用 sync_run 表里的最近一次结束时间恢复计时。
+   * 按 kind 而非 name 查：同一种同步可能被多个任务名触发（如手动同步）。
+   * 表里没有记录时保持 undefined，即首次部署仍会立刻跑一轮。
+   */
+  private async seed(): Promise<void> {
+    for (const job of this.jobs) {
+      try {
+        const row = db
+          .select({ finishedAt: syncRun.finishedAt })
+          .from(syncRun)
+          .where(and(eq(syncRun.kind, job.kind), isNotNull(syncRun.finishedAt)))
+          .orderBy(desc(syncRun.startedAt))
+          .limit(1)
+          .get();
+        if (row?.finishedAt) {
+          job.lastFinishedAt = row.finishedAt.getTime();
+        }
+      } catch (error) {
+        // 读不到就当作没跑过，退回旧行为，不阻塞调度器启动
+        console.error(`[scheduler] 恢复 ${job.name} 计时失败`, error);
+      }
+    }
   }
 
   private async tick(): Promise<void> {
