@@ -188,6 +188,8 @@ type TmdbRawDetail = {
     crew?: { job?: string; name?: string }[];
     cast?: TmdbRawCastMember[];
   };
+  /** 全剧演员汇总，仅剧集接口支持；演员按角色分组在 roles 里 */
+  aggregate_credits?: { cast?: TmdbRawAggregateCastMember[] };
 };
 
 type TmdbRawCastMember = {
@@ -196,6 +198,14 @@ type TmdbRawCastMember = {
   character?: string;
   profile_path?: string | null;
   order?: number;
+};
+
+type TmdbRawAggregateCastMember = {
+  id?: number;
+  name?: string;
+  profile_path?: string | null;
+  order?: number;
+  roles?: { character?: string }[];
 };
 
 /** TMDB `/person/{id}`。简介只有这个接口才有，credits 里不带。 */
@@ -320,6 +330,27 @@ function normalizeCast(raw: TmdbRawCastMember[] | undefined): TmdbCastMember[] {
     }));
 }
 
+/**
+ * 取剧集的演员表。
+ *
+ * 选集剧（配音向的《骇人来电》）的 `credits.cast` 是空的，演员只挂在
+ * `aggregate_credits` 上；常规剧集两者都有且大体一致，所以只在
+ * 「真的拿到空列表」时才退化，免得把已有的演员表洗一遍。
+ */
+function castOf(body: TmdbRawDetail): TmdbCastMember[] {
+  const direct = normalizeCast(body.credits?.cast);
+  if (direct.length > 0) return direct;
+
+  const fallback = (body.aggregate_credits?.cast ?? []).map((c) => ({
+    id: c.id,
+    name: c.name,
+    character: c.roles?.[0]?.character,
+    profile_path: c.profile_path,
+    order: c.order,
+  }));
+  return normalizeCast(fallback);
+}
+
 /** 季结构的原始字段容错：缺 season_number 的条目直接丢掉。 */
 function normalizeSeasons(raw: TmdbRawSeason[] | undefined): TmdbSeason[] {
   return (raw ?? [])
@@ -346,7 +377,7 @@ export async function tmdbDetail(
   tmdbId: number,
 ): Promise<TmdbDetail | null> {
   const { data: body } = await requestTmdb<TmdbRawDetail>(`${mediaType}/${tmdbId}`, {
-    append_to_response: "credits,external_ids,production_countries",
+    append_to_response: "credits,aggregate_credits,external_ids,production_countries",
   });
   if (!body) return null;
 
@@ -369,7 +400,7 @@ export async function tmdbDetail(
     genres: (body.genres ?? []).map((g) => g.name ?? "").filter(Boolean),
     directors,
     countries: normalizeCountries(body.production_countries),
-    cast: normalizeCast(body.credits?.cast),
+    cast: castOf(body),
     posterPath: body.poster_path ?? null,
     seasonCount: isTv ? body.number_of_seasons ?? null : null,
     episodeCount: isTv ? body.number_of_episodes ?? null : null,
