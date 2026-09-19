@@ -68,11 +68,13 @@ export function SyncSettings({
   /**
    * 手动立刻抓一轮。服务端立即返回并转后台执行，这里轮询到 running 变 false 为止；
    * 中途切走页面只会丢掉轮询，抓取不受影响。
+   * 这里是全量入口，与概览页的「手动全量」共用同一套冷却规则——
+   * 冷却期内的点击会由服务端拒绝并回显原因，不会偷偷放行。
    */
   const startSync = async () => {
     setStarting(true);
     try {
-      setSyncState(await startManualSyncAction());
+      setSyncState(await startManualSyncAction("full"));
     } finally {
       if (aliveRef.current) setStarting(false);
     }
@@ -110,7 +112,8 @@ export function SyncSettings({
           即停，所以开销极小；每周做一次完整回扫，捡回你事后修改的老评分与短评。
           首次回扫条目多、耗时较长，若撞上作息窗口结束会自动中止并记下位置，
           下次从断点继续，不会整夜连续抓取。
-          重复抓取不会产生重复记录；也可以点「立即同步」手动跑一轮完整抓取。
+          重复抓取不会产生重复记录；也可以点「立即全量同步」手动跑一轮完整抓取，
+          与自动全量共用 72 小时的冷却间隔。
         </p>
       </div>
 
@@ -347,7 +350,7 @@ export function SyncSettings({
               ? "启动中…"
               : running
                 ? `同步中 ${syncState?.seen ?? 0}${syncState?.total ? `/${syncState.total}` : ""}…`
-                : "立即同步"}
+                : "立即全量同步"}
           </Button>
           <Button type="submit" size="sm" disabled={pending}>
             <Save />

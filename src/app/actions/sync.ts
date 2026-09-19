@@ -2,8 +2,13 @@
 
 import { revalidatePath } from "next/cache";
 import { after } from "next/server";
-import { getSetting, setSetting } from "@/lib/settings";
-import { hasTmdbKey } from "@/lib/tmdb";
+import { setSetting } from "@/lib/settings";
+import {
+  manualSyncBlocker,
+  type SyncCardsState,
+  type SyncMode,
+} from "@/lib/sync-status";
+import { getSyncCardsState } from "@/lib/sync-status-server";
 import { runManualDoubanSync } from "@/worker/jobs/douban-sync";
 
 export type FormState = { error?: string; ok?: boolean } | undefined;
@@ -147,6 +152,7 @@ type ManualSyncProgress = {
 /**
  * 手动同步进度同样只放 web 进程内存：任务由 after() 在本进程继续跑，
  * 前端轮询同一进程即可。（与补全进度同理，重启只丢进度显示。）
+ * 两张卡片共用一个槽位——同一时刻只可能有一轮手动同步在跑。
  */
 let manualSync: ManualSyncProgress | null = null;
 
@@ -163,27 +169,36 @@ function manualSyncSnapshot(): ManualSyncState {
 }
 
 /**
+ * 概览页同步卡片的状态：倒计时的全部依据由服务端算好，
+ * 客户端只负责按秒重绘。页面加载与每次手动触发后各取一次。
+ */
+export async function getSyncCardsStateAction(): Promise<SyncCardsState> {
+  return getSyncCardsState();
+}
+
+/**
  * 立即抓取一轮豆瓣。绕过 sync.enabled 总开关——用户手动点按钮就是明确的意图。
  * 与 worker 的定时任务共用同一把锁，撞上时直接告知而不是排队等待。
  * 抓取耗时视规模而定：首次全量回扫两千多条要数小时（逐条等 TMDB），
  * 之后元数据已齐就只剩翻页间隔，几十分钟即可跑完。
  * 因此和补全一样交给 after() 在响应结束后跑，期间页面导航不会被挂住。
  * 锁的存活由续租维持，不会因为跑得久而被 worker 抢走。
+ *
+ * 冷却在服务端校验而非只靠前端禁用：倒计时是前端算的，刷新页面、
+ * 改系统时间都能绕过，真正的闸门必须在发请求的这一侧。
  */
-export async function startManualSyncAction(): Promise<ManualSyncState> {
+export async function startManualSyncAction(mode: SyncMode): Promise<ManualSyncState> {
   if (manualSync?.running) return manualSyncSnapshot();
 
-  const uid = String(getSetting("douban.uid") ?? "").trim();
-  if (!uid) {
-    return { error: "请先填写豆瓣 ID 并保存", running: false, seen: 0, total: null };
-  }
-  if (!hasTmdbKey()) {
-    return { error: "请先填写 TMDB API Key 并保存", running: false, seen: 0, total: null };
+  const state = getSyncCardsState();
+  const blocker = manualSyncBlocker(state, mode, state.now);
+  if (blocker) {
+    return { error: blocker, running: false, seen: 0, total: null };
   }
 
   const progress: ManualSyncProgress = { running: true, seen: 0, total: null };
   manualSync = progress;
-  after(() => runManualSync(progress));
+  after(() => runManualSync(progress, mode));
 
   return manualSyncSnapshot();
 }
@@ -193,12 +208,12 @@ export async function getManualSyncProgressAction(): Promise<ManualSyncState> {
   return manualSyncSnapshot();
 }
 
-async function runManualSync(progress: ManualSyncProgress): Promise<void> {
+async function runManualSync(progress: ManualSyncProgress, mode: SyncMode): Promise<void> {
   try {
     const { ran, result } = await runManualDoubanSync((p) => {
       progress.seen = p.seen;
       progress.total = p.total;
-    });
+    }, mode);
 
     if (!ran) {
       progress.message = "worker 正在同步，等它跑完再试。";

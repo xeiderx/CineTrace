@@ -81,11 +81,20 @@ export type DoubanSyncProgress = {
   total: number | null;
 };
 
+/** 一轮同步的模式：全量完整翻页，或只翻每个列表首页就早停 */
+export type DoubanSyncMode = "full" | "incremental";
+
 type DoubanSyncOptions = {
   /** 手动同步时忽略 sync.enabled 总开关 */
   force?: boolean;
-  /** 强制完整翻页，忽略「每周一次」的全量间隔（手动同步用） */
-  full?: boolean;
+  /**
+   * 指定这一轮的模式。不传则由「距上次全量是否满一周」自动决定——
+   * 手动入口要尊重用户点的是哪个按钮：点增量就只翻首页，
+   * 哪怕恰好到了每周全量的时候，也只把全量让给下一轮定时任务。
+   */
+  mode?: DoubanSyncMode;
+  /** 这一轮是否由用户手动触发。冷却时间戳只对手动轮有意义 */
+  manual?: boolean;
   onProgress?: (progress: DoubanSyncProgress) => void;
 };
 
@@ -108,12 +117,13 @@ export const doubanSyncJob: Job = {
  */
 export async function runManualDoubanSync(
   onProgress: (progress: DoubanSyncProgress) => void,
+  mode: DoubanSyncMode = "full",
 ): Promise<{ ran: boolean; result: JobResult | null }> {
   let result: JobResult | null = null;
   const job: Job = {
     ...doubanSyncJob,
     run: async () => {
-      result = await runDoubanSync({ force: true, full: true, onProgress });
+      result = await runDoubanSync({ force: true, mode, manual: true, onProgress });
       return result;
     },
   };
@@ -235,8 +245,8 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
 
   /* ------------------------------ 抓取主循环 ------------------------------ */
 
-  // 三种情况要完整翻页：首次运行（没有全量时间戳）、距上次满一周、手动触发
-  const full = options.full === true || isFullSyncDue();
+  // 模式判定：手动轮由按钮决定，自动轮靠「距上次全量是否满一周」判断
+  const full = options.mode ? options.mode === "full" : isFullSyncDue();
   const mode = full ? "全量" : "增量";
 
   // 「看过」是主列表必抓；两个小列表各有开关。
@@ -367,9 +377,17 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
   // 中途被豆瓣拒绝时两者都不动：时间戳不写，于是下一轮仍是全量，
   // 剩下的条目马上就能再翻一遍，而不必等到一周后。
   // 清游标只认全量轮：增量轮根本不会读游标，让它去改这个值只会平白毁掉别处的断点。
+  //
+  // 手动轮的冷却时间戳同样只认「真跑完」：被拒绝或中途停下时什么都不写，
+  // 否则用户会为了一个根本没成的同步白等一小时（增量）或三天（全量）。
+  // 全量的 72 小时冷却直接复用 lastFullSyncAt——它的语义就是「最近一次全量完成」，
+  // 手动全量成功后刷新它，天然满足「起点是任意一次全量（含自动）」。
   if (full && stopped === null) {
     setSetting("douban.syncCursor", "");
     setSetting("douban.lastFullSyncAt", new Date().toISOString());
+  }
+  if (options.manual && !full && stopped === null) {
+    setSetting("douban.lastManualIncAt", new Date().toISOString());
   }
 
   const summary = `${mode}同步共 ${stats.itemsSeen} 条（新增 ${stats.itemsNew} / 更新 ${stats.itemsUpdated}），错误 ${stats.errorCount} 条`;

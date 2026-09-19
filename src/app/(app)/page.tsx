@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Clock, Film, Layers, Star } from "lucide-react";
 import { EmptyState } from "@/components/layout/empty-state";
 import { PageHeader } from "@/components/layout/page-header";
+import { SyncCards } from "@/components/overview/sync-cards";
 import { WorkPoster } from "@/components/library/work-card";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -12,12 +13,14 @@ import {
   viewStatusTone,
 } from "@/lib/labels";
 import { getOverviewStats, listRecentWatches } from "@/lib/queries";
+import { getSyncCardsState } from "@/lib/sync-status-server";
 
 export const metadata: Metadata = { title: "概览" };
 
 export default function OverviewPage() {
   const stats = getOverviewStats();
   const recent = listRecentWatches(8);
+  const syncState = getSyncCardsState();
 
   const cards = [
     {
@@ -79,6 +82,16 @@ export default function OverviewPage() {
           );
         })}
       </div>
+
+      <section className="mt-8">
+        <div className="mb-3 flex items-center justify-between gap-4">
+          <h2 className="text-lg font-semibold">同步</h2>
+          <p className="text-xs text-muted-foreground">
+            worker 每 6 小时增量、每周全量，倒计时即为下一次自动执行的时间
+          </p>
+        </div>
+        <SyncCards initial={syncState} />
+      </section>
 
       <section className="mt-8">
         <div className="mb-3 flex items-center justify-between gap-4">
