@@ -14,7 +14,15 @@ import { hasTmdbKey, tmdbDetail } from "@/lib/tmdb";
 import { sleep } from "@/worker/throttle";
 
 export type BackupFormState =
-  | { error?: string; ok?: boolean; message?: string }
+  | {
+      error?: string;
+      ok?: boolean;
+      message?: string;
+      /** 本次成功写入元数据的数量 */
+      updated?: number;
+      /** 库里仍待补的作品数（含本次拉取失败的） */
+      remaining?: number;
+    }
   | undefined;
 
 const MAX_BACKUP_BYTES = 32 * 1024 * 1024;
@@ -84,7 +92,7 @@ export async function backfillMetadataAction(): Promise<BackupFormState> {
 
   const pending = listPendingMetadata(BACKFILL_BATCH);
   if (pending.length === 0) {
-    return { ok: true, message: "所有作品都已具备元数据，无需补全。" };
+    return { ok: true, message: "所有作品都已具备元数据，无需补全。", remaining: 0 };
   }
 
   let updated = 0;
@@ -131,8 +139,12 @@ export async function backfillMetadataAction(): Promise<BackupFormState> {
 
   return {
     ok: true,
+    updated,
+    remaining,
     message: remaining > 0
-      ? `本次补全 ${updated} 部（失败 ${failed} 部），还剩 ${remaining} 部，可再次点击继续。`
+      ? failed > 0
+        ? `本次补全 ${updated} 部（失败 ${failed} 部），还剩 ${remaining} 部。`
+        : `本次补全 ${updated} 部，还剩 ${remaining} 部。`
       : `补全完成：本次 ${updated} 部（失败 ${failed} 部）。`,
   };
 }

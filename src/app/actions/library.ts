@@ -6,7 +6,8 @@ import { redirect } from "next/navigation";
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { platform, tag, viewRecord, work, workTag } from "@/db/schema";
-import { getDefaultPlatform } from "@/lib/queries";
+import { getDefaultPlatform, posterUrl } from "@/lib/queries";
+import { hasTmdbKey, searchTmdb, tmdbDetail } from "@/lib/tmdb";
 
 export type FormState = { error?: string; ok?: boolean } | undefined;
 
@@ -144,6 +145,115 @@ export async function deleteWorkAction(formData: FormData): Promise<void> {
 
   refreshLibrary(id);
   redirect("/library");
+}
+
+/* -------------------------------------------------------------------------- */
+/*                              手动重新匹配 TMDB                               */
+/* -------------------------------------------------------------------------- */
+
+export type SearchState =
+  | { candidates?: TmdbCandidate[]; error?: string }
+  | undefined;
+
+/** 候选项。海报已拼成完整 URL，客户端组件不必知道 TMDB 图床规则 */
+export type TmdbCandidate = {
+  tmdbId: number;
+  mediaType: "movie" | "tv";
+  title: string;
+  originalTitle: string | null;
+  year: number | null;
+  poster: string | null;
+};
+
+/** 手动查询 TMDB 候选。输入片名或 TMDB ID 都可以 */
+export async function searchTmdbAction(
+  _prev: SearchState,
+  formData: FormData,
+): Promise<SearchState> {
+  const query = required(formData, "query");
+  if (!query) return { error: "请输入片名或 TMDB ID" };
+  if (!hasTmdbKey()) return { error: "请先在设置里填写 TMDB API Key" };
+
+  const results = await searchTmdb(query);
+  if (results.length === 0) {
+    return { error: "没有找到匹配的条目，换个片名或直接填 TMDB ID 试试" };
+  }
+
+  return {
+    candidates: results.map((r) => ({
+      tmdbId: r.tmdbId,
+      mediaType: r.mediaType,
+      title: r.title || r.originalTitle || String(r.tmdbId),
+      originalTitle: r.originalTitle,
+      year: r.year,
+      poster: posterUrl(r.posterPath, "w185"),
+    })),
+  };
+}
+
+export type MatchState = { ok?: boolean; message?: string; error?: string };
+
+/**
+ * 把作品重新绑定到指定的 TMDB 条目，并用详情接口一次性回填
+ * 海报、简介、时长、分季结构等字段（手动匹配后无需再逐项填表）。
+ */
+export async function matchWorkToTmdbAction(
+  formData: FormData,
+): Promise<MatchState> {
+  const id = int(formData, "id");
+  const tmdbId = int(formData, "tmdbId");
+  const mediaType = required(formData, "mediaType");
+  if (id == null || tmdbId == null) return { error: "缺少作品或 TMDB ID" };
+  if (mediaType !== "movie" && mediaType !== "tv") return { error: "类型只能是电影或剧集" };
+
+  const current = db.select().from(work).where(eq(work.id, id)).get();
+  if (!current) return { error: "作品不存在" };
+
+  // 唯一索引 (mediaType, tmdbId)：同一 TMDB 条目不能挂到两部作品上
+  const occupied = db
+    .select({ id: work.id, title: work.title })
+    .from(work)
+    .where(and(eq(work.mediaType, mediaType), eq(work.tmdbId, tmdbId)))
+    .get();
+  if (occupied && occupied.id !== id) {
+    return { error: `该条目已绑定到「${occupied.title}」，请先处理那一部` };
+  }
+
+  const detail = await tmdbDetail(mediaType, tmdbId);
+  if (!detail) return { error: "拉取 TMDB 详情失败，请确认 ID 是否正确" };
+
+  const isTv = mediaType === "tv";
+  // 剧集年份取第一季首播年，与同步任务保持一致
+  const firstSeasonYear = detail.seasons[0]?.airDate
+    ? Number(detail.seasons[0].airDate.slice(0, 4)) || null
+    : null;
+
+  db.update(work)
+    .set({
+      mediaType,
+      tmdbId,
+      originalTitle: detail.originalTitle,
+      posterPath: detail.posterPath,
+      overview: detail.overview,
+      runtime: detail.runtime,
+      seasonCount: isTv ? detail.seasonCount ?? (detail.seasons.length || null) : null,
+      episodeCount: isTv ? detail.episodeCount ?? null : null,
+      seasonsJson: JSON.stringify(isTv ? detail.seasons : []),
+      releaseDate: detail.releaseDate,
+      imdbId: detail.imdbId,
+      genres: JSON.stringify(detail.genres),
+      directors: JSON.stringify(detail.directors),
+      ...(isTv && firstSeasonYear != null ? { year: firstSeasonYear } : {}),
+      // 人工确认的结果不参与后续自动匹配
+      matchStatus: "manual",
+      matchStrategy: "manual",
+      metadataSyncedAt: new Date(),
+    })
+    .where(eq(work.id, id))
+    .run();
+
+  refreshLibrary(id);
+  return { ok: true, message: "已重新绑定，元数据已更新" };
 }
 
 /** 为作品挂上标签。已存在的标签直接复用，否则新建 */

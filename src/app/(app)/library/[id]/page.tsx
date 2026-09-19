@@ -9,6 +9,7 @@ import {
 import { ConfirmDeleteButton } from "@/components/library/confirm-delete-button";
 import { ViewRecordDialog } from "@/components/library/view-record-dialog";
 import { WorkFormDialog } from "@/components/library/work-form-dialog";
+import { WorkMatchDialog } from "@/components/library/work-match-dialog";
 import { WorkTagEditor } from "@/components/library/work-tag-editor";
 import {
   RatingStars,
@@ -262,6 +263,7 @@ export default async function WorkDetailPage({
             platforms={platforms}
             defaultPlatformName={defaultPlatform?.name ?? null}
           />
+          <WorkMatchDialog workId={item.id} workTitle={item.title} />
           <WorkFormDialog work={item} />
           <ConfirmDeleteButton
             action={deleteWorkAction}

@@ -29,9 +29,38 @@ export function BackupManager({ pendingMetadata }: Props) {
   // 补全结果只在本组件内消费，不必进 useActionState
   const [backfilling, startBackfill] = useTransition();
   const [backfillState, setBackfillState] = useState<BackupFormState>(undefined);
+  const [progress, setProgress] = useState<{ done: number; remaining: number } | null>(null);
 
   // 选文件后把文件名显示出来，避免用户以为没选上
   const [fileName, setFileName] = useState("");
+
+  /*
+   * 点一次就一直补到完。
+   * 服务端每批只处理 50 部就返回，是怕单个请求在 NAS 的 nginx 上超时
+   * （proxy_read_timeout 默认 60s），但让用户点几十遍太折磨人。分批因此不变，
+   * 改由前端循环触发：只要上一批还在推进就接着下一批。
+   * 中途失败或断网只会丢掉当前这一批，已写入的数据不受影响。
+   */
+  const runBackfill = () => {
+    startBackfill(async () => {
+      let done = 0;
+      setProgress(null);
+
+      // 上限只是兜底，正常路径靠 remaining 归零退出
+      for (let round = 0; round < 200; round += 1) {
+        const state = await backfillMetadataAction();
+        setBackfillState(state);
+
+        // 报错、已补完、或一批下来一部都没成功（剩下的都在失败）就停
+        if (!state || state.error || state.remaining === 0 || !state.updated) break;
+
+        done += state.updated;
+        setProgress({ done, remaining: state.remaining ?? 0 });
+      }
+
+      setProgress(null);
+    });
+  };
 
   return (
     <div className="space-y-3">
@@ -113,7 +142,8 @@ export function BackupManager({ pendingMetadata }: Props) {
             <Label>补全 TMDB 元数据</Label>
             <p className="text-xs text-muted-foreground">
               为导入后尚未同步过详情的作品拉取海报、简介、时长与分季结构。
-              当前待补 <span className="font-medium text-foreground">{pendingMetadata}</span> 部。
+              当前待补 <span className="font-medium text-foreground">{pendingMetadata}</span> 部，
+              点一次会自动补到完。
             </p>
           </div>
           <Button
@@ -121,14 +151,14 @@ export function BackupManager({ pendingMetadata }: Props) {
             size="sm"
             variant="outline"
             disabled={backfilling || pendingMetadata === 0}
-            onClick={() => {
-              startBackfill(async () => {
-                setBackfillState(await backfillMetadataAction());
-              });
-            }}
+            onClick={runBackfill}
           >
             <RefreshCw className={backfilling ? "animate-spin" : undefined} />
-            {backfilling ? "补全中…" : "开始补全"}
+            {backfilling
+              ? progress
+                ? `补全中 ${progress.done} 部…`
+                : "补全中…"
+              : "开始补全"}
           </Button>
         </div>
 

@@ -309,13 +309,23 @@ export function importBackup(file: BackupFile): ImportStats {
       stats.users += 1;
     }
 
-    /* 设置：整行按 key 覆盖。 */
+    /*
+     * 设置：按 key 覆盖，但备份里的空值不覆盖本地已有值。
+     * 否则「导出 → 导入」会把本地刚填好的 TMDB API Key 之类冲回空字符串。
+     * 本地缺该 key 时仍补一条空值，保持设置项齐全。
+     */
     for (const row of d.settings) {
       if (!row?.key) continue;
-      tx.insert(setting)
-        .values({ key: row.key, value: row.value })
-        .onConflictDoUpdate({ target: setting.key, set: { value: row.value, updatedAt: new Date() } })
-        .run();
+      const value = row.value ?? "";
+      const insert = tx.insert(setting).values({ key: row.key, value });
+      if (value === "") {
+        // 空值只用于补齐缺失的 key，不覆盖本地已有值
+        insert.onConflictDoNothing({ target: setting.key }).run();
+      } else {
+        insert
+          .onConflictDoUpdate({ target: setting.key, set: { value, updatedAt: new Date() } })
+          .run();
+      }
       stats.settings += 1;
     }
 

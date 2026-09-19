@@ -12,7 +12,6 @@ import { getSetting } from "@/lib/settings";
 
 const TMDB_BASE = "https://api.themoviedb.org/3";
 const TMDB_TIMEOUT_MS = 20_000;
-const SEASON_TIMEOUT_MS = 15_000;
 /** 策略之间与页之间的间隔，Phase 0 实测节奏 */
 const STRATEGY_GAP_MS = 200;
 
@@ -98,14 +97,14 @@ function normalize(raw: TmdbRawResult, fallbackType: "movie" | "tv"): TmdbResult
 }
 
 /**
- * 调用一次 TMDB 检索接口。
- * 结果里的 `person`（search/multi 会返回演员）一律剔除——它们不是作品。
+ * 发一次 TMDB 请求并解析 JSON。
+ * 失败一律返回 `error`（HTTP 状态，网络异常为 0），把「失败」与「搜不到」
+ * 的区分交给调用方。
  */
-export async function tmdb(
+async function requestTmdb<T>(
   path: string,
   params: Record<string, string> = {},
-  fallbackType: "movie" | "tv" = "movie",
-): Promise<TmdbSearchResponse> {
+): Promise<{ data: T | null; error?: number }> {
   const query = new URLSearchParams({
     language: String(getSetting("tmdb.language")),
     api_key: getTmdbKey(),
@@ -118,35 +117,36 @@ export async function tmdb(
       headers: { Accept: "application/json" },
       signal: AbortSignal.timeout(TMDB_TIMEOUT_MS),
     });
-    if (!res.ok) return { results: [], error: res.status };
-
-    const body = (await res.json()) as { results?: TmdbRawResult[] };
-    return {
-      results: (body.results ?? [])
-        .filter((r) => r.media_type !== "person")
-        .map((r) => normalize(r, fallbackType)),
-    };
+    if (!res.ok) return { data: null, error: res.status };
+    return { data: (await res.json()) as T };
   } catch {
-    return { results: [], error: 0 };
+    return { data: null, error: 0 };
   }
+}
+
+/**
+ * 调用一次 TMDB 检索接口。
+ * 结果里的 `person`（search/multi 会返回演员）一律剔除——它们不是作品。
+ */
+export async function tmdb(
+  path: string,
+  params: Record<string, string> = {},
+  fallbackType: "movie" | "tv" = "movie",
+): Promise<TmdbSearchResponse> {
+  const { data, error } = await requestTmdb<{ results?: TmdbRawResult[] }>(path, params);
+  if (!data) return { results: [], error };
+
+  return {
+    results: (data.results ?? [])
+      .filter((r) => r.media_type !== "person")
+      .map((r) => normalize(r, fallbackType)),
+  };
 }
 
 /** 校验某部剧是否存在指定季。策略 C 用来排除「名同但季数不够」的误匹配。 */
 export async function tvSeasonExists(tvId: number, season: number): Promise<boolean> {
-  const query = new URLSearchParams({
-    language: String(getSetting("tmdb.language")),
-    api_key: getTmdbKey(),
-  });
-  try {
-    const res = await fetch(`${TMDB_BASE}/tv/${tvId}/season/${season}?${query}`, {
-      dispatcher,
-      headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(SEASON_TIMEOUT_MS),
-    });
-    return res.ok;
-  } catch {
-    return false;
-  }
+  const { error } = await requestTmdb(`tv/${tvId}/season/${season}`);
+  return !error;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -169,6 +169,11 @@ type TmdbRawDetail = {
   last_episode_to_air?: { runtime?: number | null } | null;
   release_date?: string;
   first_air_date?: string;
+  title?: string;
+  name?: string;
+  original_title?: string;
+  original_name?: string;
+  overview?: string | null;
   poster_path?: string | null;
   number_of_seasons?: number;
   number_of_episodes?: number;
@@ -208,6 +213,9 @@ export type TmdbDetail = {
   episodeCount: number | null;
   /** 分季结构，已滤掉特辑（season_number = 0） */
   seasons: TmdbSeason[];
+  /** 以下两项供手动匹配时一站式回填 */
+  overview: string | null;
+  originalTitle: string | null;
 };
 
 /** 季结构的原始字段容错：缺 season_number 的条目直接丢掉。 */
@@ -235,47 +243,101 @@ export async function tmdbDetail(
   mediaType: "movie" | "tv",
   tmdbId: number,
 ): Promise<TmdbDetail | null> {
-  const query = new URLSearchParams({
-    language: String(getSetting("tmdb.language")),
-    api_key: getTmdbKey(),
+  const { data: body } = await requestTmdb<TmdbRawDetail>(`${mediaType}/${tmdbId}`, {
     append_to_response: "credits,external_ids",
   });
+  if (!body) return null;
 
-  try {
-    const res = await fetch(`${TMDB_BASE}/${mediaType}/${tmdbId}?${query}`, {
-      dispatcher,
-      headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(TMDB_TIMEOUT_MS),
-    });
-    if (!res.ok) return null;
+  const isTv = mediaType === "tv";
 
-    const body = (await res.json()) as TmdbRawDetail;
-    const isTv = mediaType === "tv";
+  // 剧集没有顶层 runtime，退到「分集时长 → 最近一集时长」
+  const runtime = isTv
+    ? body.episode_run_time?.[0] ?? body.last_episode_to_air?.runtime ?? null
+    : body.runtime ?? null;
 
-    // 剧集没有顶层 runtime，退到「分集时长 → 最近一集时长」
-    const runtime = isTv
-      ? body.episode_run_time?.[0] ?? body.last_episode_to_air?.runtime ?? null
-      : body.runtime ?? null;
+  // 剧集的主创在 created_by，电影才是 crew 里的 Director
+  const directors = isTv
+    ? (body.created_by ?? []).map((c) => c.name ?? "").filter(Boolean)
+    : (body.credits?.crew ?? []).filter((c) => c.job === "Director").map((c) => c.name ?? "").filter(Boolean);
 
-    // 剧集的主创在 created_by，电影才是 crew 里的 Director
-    const directors = isTv
-      ? (body.created_by ?? []).map((c) => c.name ?? "").filter(Boolean)
-      : (body.credits?.crew ?? []).filter((c) => c.job === "Director").map((c) => c.name ?? "").filter(Boolean);
+  return {
+    runtime: runtime && runtime > 0 ? runtime : null,
+    releaseDate: (isTv ? body.first_air_date : body.release_date) || null,
+    imdbId: (isTv ? body.external_ids?.imdb_id : body.imdb_id) || null,
+    genres: (body.genres ?? []).map((g) => g.name ?? "").filter(Boolean),
+    directors,
+    posterPath: body.poster_path ?? null,
+    seasonCount: isTv ? body.number_of_seasons ?? null : null,
+    episodeCount: isTv ? body.number_of_episodes ?? null : null,
+    seasons: isTv ? normalizeSeasons(body.seasons) : [],
+    overview: body.overview?.trim() || null,
+    originalTitle: (isTv ? body.original_name : body.original_title)?.trim() || null,
+  };
+}
 
-    return {
-      runtime: runtime && runtime > 0 ? runtime : null,
-      releaseDate: (isTv ? body.first_air_date : body.release_date) || null,
-      imdbId: (isTv ? body.external_ids?.imdb_id : body.imdb_id) || null,
-      genres: (body.genres ?? []).map((g) => g.name ?? "").filter(Boolean),
-      directors,
-      posterPath: body.poster_path ?? null,
-      seasonCount: isTv ? body.number_of_seasons ?? null : null,
-      episodeCount: isTv ? body.number_of_episodes ?? null : null,
-      seasons: isTv ? normalizeSeasons(body.seasons) : [],
-    };
-  } catch {
-    return null;
+/* -------------------------------------------------------------------------- */
+/*                                 手动检索                                    */
+/* -------------------------------------------------------------------------- */
+
+/** 手动匹配的候选条数上限：够挑就行，翻页对「修正个别错误」是负担。 */
+const SEARCH_LIMIT = 12;
+
+/** 详情接口的返回与检索结果字段基本一致，复用 normalize 的字段口径。 */
+function detailToResult(raw: TmdbRawDetail & { id?: number }, mediaType: "movie" | "tv"): TmdbResult | null {
+  if (typeof raw.id !== "number") return null;
+  return normalize(
+    {
+      id: raw.id,
+      media_type: mediaType,
+      title: raw.title,
+      name: raw.name,
+      original_title: raw.original_title,
+      original_name: raw.original_name,
+      release_date: raw.release_date,
+      first_air_date: raw.first_air_date,
+      poster_path: raw.poster_path ?? null,
+      overview: raw.overview ?? null,
+    },
+    mediaType,
+  );
+}
+
+/**
+ * 手动检索候选用。
+ *
+ * 输入纯数字时当作 TMDB ID，直接点查电影与剧集两个详情接口；
+ * 否则关键词走 `search/multi`，电影与剧集混排，剔除人物类结果。
+ * 返回数组可能为空——「搜不到」和「请求失败」都归为空列表，
+ * 调用方只看「有没有候选」。
+ */
+export async function searchTmdb(query: string): Promise<TmdbResult[]> {
+  const keyword = query.trim();
+  if (!keyword) return [];
+
+  if (/^\d+$/.test(keyword)) {
+    const id = Number(keyword);
+    const [movie, tv] = await Promise.all([
+      requestTmdb<TmdbRawDetail & { id?: number }>(`movie/${id}`),
+      requestTmdb<TmdbRawDetail & { id?: number }>(`tv/${id}`),
+    ]);
+    return [
+      movie.data ? detailToResult(movie.data, "movie") : null,
+      tv.data ? detailToResult(tv.data, "tv") : null,
+    ].filter((r): r is TmdbResult => r !== null);
   }
+
+  const { results } = await tmdb("search/multi", { query: keyword });
+
+  // 同名作品可能电影、剧集都命中，按「类型 + ID」去重后再截断
+  const seen = new Set<string>();
+  return results
+    .filter((r) => {
+      const key = `${r.mediaType}:${r.tmdbId}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, SEARCH_LIMIT);
 }
 
 /* -------------------------------------------------------------------------- */
