@@ -15,7 +15,7 @@ import {
   type TmdbDetail,
 } from "@/lib/tmdb";
 import { runJob, type Job, type JobResult } from "../job";
-import { sleep, throttle } from "../throttle";
+import { randomInt, sleep, throttle } from "../throttle";
 
 /**
  * 豆瓣同步主任务：把 Phase 0 验证过的链路正式产品化。
@@ -36,8 +36,13 @@ import { sleep, throttle } from "../throttle";
 const DOUBAN_ORIGIN = "https://movie.douban.com";
 /** 豆瓣 collect 页固定每页 15 条 */
 const COLLECT_PAGE_SIZE = 15;
-/** 翻页间隔，Phase 0 实测节奏 */
-const PAGE_GAP_MS = 5000;
+/**
+ * 翻页间隔区间（毫秒）。豆瓣列表页是全量翻的，一轮上百次请求，
+ * 所以刻意比 TMDB 侧慢得多；这里取随机区间而非固定值——
+ * 固定 5 秒的机械节奏是最典型的机器特征，比等久一点更容易被拦。
+ */
+const PAGE_GAP_MIN_MS = 5000;
+const PAGE_GAP_MAX_MS = 12_000;
 /** 400 页上限：防止总数解析异常导致无限翻页 */
 const MAX_START = 6000;
 
@@ -67,8 +72,9 @@ export const doubanSyncJob: Job = {
   name: "douban-sync",
   kind: "douban-html",
   intervalMs: 6 * 60 * 60 * 1000,
-  // 2100 条记录分页抓取耗时较长，锁的存活时间给足
-  lockTtlMs: 30 * 60 * 1000,
+  // 列表页全量翻，上百页配上 5~12 秒的随机间隔，最坏要跑半小时以上；
+  // 锁必须比任务长，否则兜底过期会让两个进程同时抓同一个账号
+  lockTtlMs: 60 * 60 * 1000,
   run: () => runDoubanSync(),
 };
 
@@ -204,7 +210,7 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
   while (start <= MAX_START) {
     const url = collectUrl(uid, start);
     if (start > 0) {
-      await sleep(PAGE_GAP_MS);
+      await sleep(randomInt(PAGE_GAP_MIN_MS, PAGE_GAP_MAX_MS));
       const page = await req(url);
       if (page.status !== 200 || isBlocked(page.text) || needsLogin(page.text)) {
         issue("blocked", null, null, `列表页第 ${start / COLLECT_PAGE_SIZE + 1} 页受限 status=${page.status}`);

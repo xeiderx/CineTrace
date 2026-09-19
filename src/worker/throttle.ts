@@ -5,7 +5,7 @@ export function sleep(ms: number): Promise<void> {
 }
 
 /** [min, max] 区间内的随机整数 */
-function randomInt(min: number, max: number): number {
+export function randomInt(min: number, max: number): number {
   if (max <= min) return min;
   return min + Math.floor(Math.random() * (max - min + 1));
 }
