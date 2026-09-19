@@ -167,6 +167,30 @@ export function WorkFormDialog({ work }: { work?: Work }) {
             </div>
 
             <div className="space-y-2">
+              <Label htmlFor="seasonCount">总季数（剧集）</Label>
+              <Input
+                id="seasonCount"
+                name="seasonCount"
+                type="number"
+                min={1}
+                defaultValue={work?.seasonCount ?? ""}
+                placeholder="3"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="episodeCount">总集数（剧集）</Label>
+              <Input
+                id="episodeCount"
+                name="episodeCount"
+                type="number"
+                min={1}
+                defaultValue={work?.episodeCount ?? ""}
+                placeholder="36"
+              />
+            </div>
+
+            <div className="space-y-2">
               <Label htmlFor="tmdbId">TMDB ID</Label>
               <Input
                 id="tmdbId"

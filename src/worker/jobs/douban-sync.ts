@@ -1,11 +1,19 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { syncIssue, viewRecord, work, type NewWork } from "@/db/schema";
 import { getSetting } from "@/lib/settings";
 import { archiveRaw } from "@/lib/douban/archive";
 import { isBlocked, needsLogin, req } from "@/lib/douban/client";
 import { PARSER_VERSION, parseCollectTotal, parseListPage, type ListPageItem } from "@/lib/douban/parse";
-import { hasTmdbKey, matchWork, tmdbDetail, type MatchHit, type TmdbDetail } from "@/lib/tmdb";
+import {
+  baseTitleOf,
+  hasTmdbKey,
+  matchWork,
+  parseSeasonNumber,
+  tmdbDetail,
+  type MatchHit,
+  type TmdbDetail,
+} from "@/lib/tmdb";
 import type { Job, JobResult } from "../job";
 import { sleep, throttle } from "../throttle";
 
@@ -17,6 +25,8 @@ import { sleep, throttle } from "../throttle";
  * 关键设计：
  * - 幂等：view_record.sourceKey = `douban:{id}`，重跑不会产生重复记录
  * - 增量：列表页每轮全量翻（只花翻页等待），已同步过元数据的条目不再调 TMDB
+ * - 整季归并：豆瓣把每一季当作独立条目，这里按 TMDB 的 `(mediaType, tmdbId)`
+ *   归到同一行 work，季信息记在 seasons_json，每季仍各自写一条 view_record
  * - 手动优先：matchStatus 为 manual 的条目不再自动改写绑定关系
  * - 不抓详情页：机房 IP 访问豆瓣详情页必被风控拦截，
  *   而匹配只需列表页的「中文名 / 别名 / 年份」，
@@ -90,26 +100,27 @@ export const doubanSyncJob: Job = {
 
       const sourceKey = `douban:${doubanId}`;
       const existingRecord = db
-        .select({ id: viewRecord.id })
+        .select({ id: viewRecord.id, workId: viewRecord.workId })
         .from(viewRecord)
         .where(eq(viewRecord.sourceKey, sourceKey))
         .get();
-      const existingWork = db.select().from(work).where(eq(work.doubanId, doubanId)).get();
 
-      let workId = existingWork?.id ?? null;
+      // 条目当前指向的作品：优先记录上挂着的 work，其次按豆瓣 id 直接找。
+      // 多季条目只有「代表季」的 id 落在 work.doubanId 上，其余靠记录关联。
+      const linkedWork =
+        (existingRecord?.workId != null
+          ? db.select().from(work).where(eq(work.id, existingRecord.workId)).get()
+          : undefined) ?? db.select().from(work).where(eq(work.doubanId, doubanId)).get();
 
-      // 手动绑定的条目不再自动改写；已有元数据的条目跳过 TMDB 调用
-      const manuallyBound = existingWork?.matchStatus === "manual";
-      if (!manuallyBound && !existingWork?.metadataSyncedAt) {
+      let workId = linkedWork?.id ?? null;
+
+      // 手动绑定的条目不再自动改写；元数据已齐的条目跳过 TMDB 调用
+      if (linkedWork?.matchStatus !== "manual" && !isMetadataComplete(linkedWork)) {
         const resolved = await resolveWork(item, issue);
-        if (resolved) workId = resolved;
-      } else if (existingWork) {
-        db.update(work)
-          .set({ metadataSyncedAt: new Date() })
-          .where(eq(work.id, existingWork.id))
-          .run();
+        if (resolved !== null) workId = resolved;
       }
 
+      const season = parseSeasonNumber(titleCn);
       const values = {
         workId,
         source: "douban",
@@ -118,6 +129,9 @@ export const doubanSyncJob: Job = {
         watchedAt: item.markedAt,
         rating: item.rating,
         comment: item.comment,
+        // 豆瓣一季一条记录，季号落在记录上，详情页据此按季展示；
+        // 标题里没有季标识的条目不写，避免覆盖手工填的进度
+        ...(season !== null ? { progressSeason: season } : {}),
       };
 
       // sourceKey 上的唯一索引保证重跑只更新不新增
@@ -199,6 +213,19 @@ type IssueReporter = (
 ) => void;
 
 /**
+ * 元数据是否已补齐、无需再调 TMDB。
+ * 匹配失败的条目不算完成——策略修好后要能自动重试；
+ * 剧集还要求 seasons_json 非空，以便旧数据补上季结构。
+ */
+function isMetadataComplete(row: typeof work.$inferSelect | undefined): boolean {
+  if (!row) return false;
+  if (row.matchStatus !== "matched" && row.matchStatus !== "manual") return false;
+  if (!row.metadataSyncedAt) return false;
+  if (row.mediaType === "tv" && row.tmdbId !== null && row.seasonsJson === "[]") return false;
+  return true;
+}
+
+/**
  * TMDB 匹配 → 补详情 → 写 work。
  * 返回作品 id；匹配失败也会落一行 matchStatus='failed' 的作品，
  * 这样观影记录不至于因为「暂时匹配不上」而丢失。
@@ -222,13 +249,38 @@ async function resolveWork(item: ListPageItem, issue: IssueReporter): Promise<nu
   const detail = hit ? await tmdbDetail(hit.result.mediaType, hit.result.tmdbId) : null;
 
   const values = buildWorkValues(item, detail, hit, outcome.ok ? null : outcome.score);
-  const existing = db.select({ id: work.id }).from(work).where(eq(work.doubanId, doubanId)).get();
 
   try {
+    // 归属顺序：先按 TMDB 作品复用——豆瓣每季一条，靠这里归并成同一部剧；
+    // 再按豆瓣条目找（旧数据此时无 tmdbId），最后才新建。
+    const { mediaType, tmdbId } = values;
+    const byTmdb =
+      tmdbId != null
+        ? db
+            .select()
+            .from(work)
+            .where(and(eq(work.mediaType, mediaType), eq(work.tmdbId, tmdbId)))
+            .get()
+        : undefined;
+    const byDouban = db.select().from(work).where(eq(work.doubanId, doubanId)).get();
+    const existing = byTmdb ?? byDouban;
+
     if (existing) {
-      db.update(work).set(values).where(eq(work.id, existing.id)).run();
+      // doubanId 只留一个代表值，冲突会撞唯一索引，因此沿用已有的
+      db.update(work)
+        .set({ ...values, doubanId: existing.doubanId ?? values.doubanId })
+        .where(eq(work.id, existing.id))
+        .run();
+
+      // 该季此前若自成一个作品行（旧数据每季各匹配一次留下的重复），
+      // 把它的观影记录改挂到归并后的作品上再删除，避免同一部剧出现两条
+      if (byDouban && byDouban.id !== existing.id) {
+        db.update(viewRecord).set({ workId: existing.id }).where(eq(viewRecord.workId, byDouban.id)).run();
+        db.delete(work).where(eq(work.id, byDouban.id)).run();
+      }
       return existing.id;
     }
+
     return db.insert(work).values(values).returning({ id: work.id }).get().id;
   } catch (error) {
     // 唯一索引冲突（同一 TMDB 作品已绑到别的豆瓣条目）时退化为「只挂记录」
@@ -245,18 +297,29 @@ function buildWorkValues(
   failedScore: number | null,
 ): NewWork {
   const tmdb = hit?.result;
+  const isTv = tmdb?.mediaType === "tv";
+  const seasons = detail?.seasons ?? [];
+  // 整剧年份取第一季首播年，避免各季互相改写
+  const firstSeasonYear = seasons[0]?.airDate ? Number(seasons[0].airDate.slice(0, 4)) || null : null;
+
   return {
     mediaType: tmdb?.mediaType ?? guessMediaType(item.titleCn),
     tmdbId: tmdb?.tmdbId ?? null,
     doubanId: item.doubanId,
-    title: item.titleCn,
+    // 剧集用整剧名（剥掉「第X季」），多季条目才能收敛到同一行
+    title: isTv ? baseTitleOf(item.titleCn) : item.titleCn,
     originalTitle: tmdb?.originalTitle ?? item.aliases[0] ?? null,
-    // 豆瓣年份是「标记来源」的年份，比 TMDB 更贴近匹配目标
-    year: item.year ?? tmdb?.year ?? null,
-    posterPath: tmdb?.posterPath ?? null,
+    // 豆瓣年份是「该季」的年份，仅电影直接沿用
+    year: isTv ? firstSeasonYear ?? tmdb?.year ?? item.year ?? null : item.year ?? tmdb?.year ?? null,
+    // 主海报用 TMDB 整剧海报，不用季海报
+    posterPath: detail?.posterPath ?? tmdb?.posterPath ?? null,
     backdropPath: tmdb?.backdropPath ?? null,
     overview: tmdb?.overview ?? null,
+    // 剧集为单集时长
     runtime: detail?.runtime ?? null,
+    seasonCount: isTv ? detail?.seasonCount ?? (seasons.length || null) : null,
+    episodeCount: isTv ? detail?.episodeCount ?? null : null,
+    seasonsJson: JSON.stringify(seasons),
     releaseDate: detail?.releaseDate ?? tmdb?.releaseDate ?? null,
     imdbId: detail?.imdbId ?? null,
     genres: JSON.stringify(detail?.genres ?? []),

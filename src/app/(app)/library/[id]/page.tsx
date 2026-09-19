@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, CalendarDays, Clock, Film, Tv } from "lucide-react";
+import { ArrowLeft, CalendarDays, Clock, Film, Star, Tv } from "lucide-react";
 import {
   deleteViewRecordAction,
   deleteWorkAction,
@@ -35,6 +35,8 @@ import {
   latestRecord,
   listPlatforms,
   listTags,
+  posterUrl,
+  type SeasonWithRecord,
   type ViewRecordWithPlatform,
 } from "@/lib/queries";
 import type { Platform } from "@/db/schema";
@@ -154,6 +156,62 @@ function ViewRecordItem({
   );
 }
 
+/** 分季一览：TMDB 的季结构 + 该季在豆瓣的标记时间与星级 */
+function SeasonItem({ season }: { season: SeasonWithRecord }) {
+  const poster = posterUrl(season.posterPath, "w185");
+  const { record } = season;
+
+  return (
+    <li className="flex gap-4 px-4 py-4">
+      <div className="w-16 shrink-0 overflow-hidden rounded-lg bg-muted ring-1 ring-foreground/10">
+        {poster ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={poster}
+            alt={`${season.name} 海报`}
+            loading="lazy"
+            className="aspect-[2/3] w-full object-cover"
+          />
+        ) : (
+          <div className="flex aspect-[2/3] w-full items-center justify-center text-lg font-semibold text-muted-foreground/50">
+            {season.seasonNumber}
+          </div>
+        )}
+      </div>
+
+      <div className="min-w-0 flex-1 space-y-1.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-medium">{season.name}</span>
+          {season.voteAverage ? (
+            <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+              <Star className="size-3 fill-primary text-primary" />
+              TMDB {season.voteAverage.toFixed(1)}
+            </span>
+          ) : null}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+          {season.episodeCount > 0 ? <span>共 {season.episodeCount} 集</span> : null}
+          {season.airDate ? <span>{season.airDate} 首播</span> : null}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          {record ? (
+            <>
+              <RatingStars value={record.rating} />
+              <span className="text-muted-foreground">
+                {record.watchedAt ? `${record.watchedAt} 标记` : "未填写标记日期"}
+              </span>
+            </>
+          ) : (
+            <span className="text-muted-foreground">豆瓣无这一季的标记</span>
+          )}
+        </div>
+      </div>
+    </li>
+  );
+}
+
 export default async function WorkDetailPage({
   params,
 }: PageProps<"/library/[id]">) {
@@ -161,7 +219,7 @@ export default async function WorkDetailPage({
   const detail = getWorkDetail(Number(id));
   if (!detail) notFound();
 
-  const { work: item, records, tags } = detail;
+  const { work: item, records, tags, seasons } = detail;
   const platforms = listPlatforms();
   const defaultPlatform = getDefaultPlatform();
   const allTags = listTags();
@@ -300,6 +358,23 @@ export default async function WorkDetailPage({
           ) : null}
         </div>
       </div>
+
+      {seasons.length > 0 ? (
+        <section className="mt-10">
+          <div className="mb-3 flex items-center justify-between gap-4">
+            <h2 className="text-lg font-semibold">分季</h2>
+            <p className="text-xs text-muted-foreground">
+              共 {seasons.length} 季
+            </p>
+          </div>
+
+          <ul className="divide-y divide-border/60 overflow-hidden rounded-xl bg-card ring-1 ring-foreground/10">
+            {seasons.map((season) => (
+              <SeasonItem key={season.seasonNumber} season={season} />
+            ))}
+          </ul>
+        </section>
+      ) : null}
 
       <section className="mt-10">
         <div className="mb-3 flex items-center justify-between gap-4">

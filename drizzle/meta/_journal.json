@@ -8,6 +8,13 @@
       "when": 1789644511141,
       "tag": "0000_outgoing_tiger_shark",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1789775850732,
+      "tag": "0001_dry_scarlet_spider",
+      "breakpoints": true
     }
   ]
 }

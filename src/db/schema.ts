@@ -92,6 +92,12 @@ export const work = sqliteTable(
     seasonCount: integer("season_count"),
     /** 剧集总集数 */
     episodeCount: integer("episode_count"),
+    /**
+     * 分季结构缓存（TMDB `/tv/{id}.seasons[]` 裁剪版）。
+     * 每项含 season_number/name/air_date/episode_count/poster_path/vote_average；
+     * 已滤掉 season_number = 0 的特辑。电影为 "[]"。
+     */
+    seasonsJson: text("seasons_json").default("[]").notNull(),
     /** 首播/上映日期，ISO 文本 */
     releaseDate: text("release_date"),
     /** 外链 */

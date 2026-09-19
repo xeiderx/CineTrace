@@ -248,11 +248,75 @@ export type ViewRecordWithPlatform = ViewRecord & {
   isDefaultPlatform: boolean;
 };
 
+/** `work.seasonsJson` 的一项，对应 TMDB `/tv/{id}` 的 `seasons[]`。 */
+export type WorkSeason = {
+  seasonNumber: number;
+  name: string;
+  airDate: string | null;
+  episodeCount: number;
+  posterPath: string | null;
+  voteAverage: number | null;
+};
+
+/** 分季结构 + 该季在豆瓣的标记（星级 / 标记时间），没有标记时为 null。 */
+export type SeasonWithRecord = WorkSeason & {
+  record: ViewRecord | null;
+};
+
 export type WorkDetail = {
   work: Work;
   records: ViewRecordWithPlatform[];
   tags: Tag[];
+  /** 仅剧集非空；已按季号与观影记录合并 */
+  seasons: SeasonWithRecord[];
 };
+
+/** 解析 seasonsJson。任何异常一律当空数组，坏数据不该让页面挂掉。 */
+export function parseSeasons(json: string | null | undefined): WorkSeason[] {
+  if (!json) return [];
+  try {
+    const parsed: unknown = JSON.parse(json);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter(
+        (s): s is WorkSeason =>
+          typeof s === "object" && s !== null && typeof (s as WorkSeason).seasonNumber === "number",
+      )
+      .sort((a, b) => a.seasonNumber - b.seasonNumber);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 把 TMDB 的季结构与豆瓣标记按季号对齐。
+ * 豆瓣一季一条观影记录，季号记在 progressSeason 上；同一季有多条时取最近一条。
+ */
+function mergeSeasons(work: Work, records: ViewRecord[]): SeasonWithRecord[] {
+  const seasons = parseSeasons(work.seasonsJson);
+  if (seasons.length === 0) return [];
+
+  const bySeason = new Map<number, ViewRecord[]>();
+  for (const record of records) {
+    if (record.progressSeason == null) continue;
+    const bucket = bySeason.get(record.progressSeason);
+    if (bucket) bucket.push(record);
+    else bySeason.set(record.progressSeason, [record]);
+  }
+
+  const merged = seasons.map((season) => ({
+    ...season,
+    record: latestRecord(bySeason.get(season.seasonNumber) ?? []),
+  }));
+
+  // 只有一季的剧，豆瓣标题通常不带「第X季」，记录上就没有季号；
+  // 此时直接把记录归到唯一那一季，否则标记时间会无处显示。
+  if (merged.length === 1 && merged[0].record === null && bySeason.size === 0) {
+    merged[0].record = latestRecord(records);
+  }
+
+  return merged;
+}
 
 export function getWorkDetail(workId: number): WorkDetail | null {
   const row = db.select().from(work).where(eq(work.id, workId)).get();
@@ -285,7 +349,7 @@ export function getWorkDetail(workId: number): WorkDetail | null {
     .all()
     .map((r) => r.tag);
 
-  return { work: row, records, tags };
+  return { work: row, records, tags, seasons: mergeSeasons(row, records) };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -306,9 +370,11 @@ export function getOverviewStats(): OverviewStats {
   const rows = db
     .select({
       rating: viewRecord.rating,
+      progressSeason: viewRecord.progressSeason,
       episodesWatched: viewRecord.episodesWatched,
       runtime: work.runtime,
       mediaType: work.mediaType,
+      seasonsJson: work.seasonsJson,
     })
     .from(viewRecord)
     .leftJoin(work, eq(work.id, viewRecord.workId))
@@ -320,12 +386,7 @@ export function getOverviewStats(): OverviewStats {
 
   for (const row of rows) {
     if (row.runtime && row.runtime > 0) {
-      // 剧集按已看集数估算，未记录集数时按单集时长算一次
-      const units =
-        row.mediaType === "tv" && row.episodesWatched && row.episodesWatched > 0
-          ? row.episodesWatched
-          : 1;
-      totalMinutes += row.runtime * units;
+      totalMinutes += row.runtime * episodeUnits(row);
     }
     if (row.rating != null) {
       ratingSum += row.rating;
@@ -340,6 +401,27 @@ export function getOverviewStats(): OverviewStats {
     averageRating: ratedCount > 0 ? ratingSum / ratedCount : null,
     ratedCount,
   };
+}
+
+/**
+ * 一条记录折算成多少「集」。电影恒为 1；
+ * 剧集优先用显式填写的已看集数，其次用该季的总集数，都没有才算 1。
+ */
+function episodeUnits(row: {
+  mediaType: string | null;
+  progressSeason: number | null;
+  episodesWatched: number | null;
+  seasonsJson: string | null;
+}): number {
+  if (row.mediaType !== "tv") return 1;
+  if (row.episodesWatched && row.episodesWatched > 0) return row.episodesWatched;
+  if (row.progressSeason != null) {
+    const season = parseSeasons(row.seasonsJson).find(
+      (s) => s.seasonNumber === row.progressSeason,
+    );
+    if (season && season.episodeCount > 0) return season.episodeCount;
+  }
+  return 1;
 }
 
 export type RecentWatch = {

@@ -145,17 +145,44 @@ export async function tvSeasonExists(tvId: number, season: number): Promise<bool
 /* -------------------------------------------------------------------------- */
 
 /** 详情接口里我们关心的字段；电影与剧集的字段名不同，统一后再返回。 */
+type TmdbRawSeason = {
+  season_number?: number;
+  name?: string;
+  air_date?: string | null;
+  episode_count?: number;
+  poster_path?: string | null;
+  vote_average?: number;
+};
+
 type TmdbRawDetail = {
   runtime?: number | null;
   episode_run_time?: number[];
   last_episode_to_air?: { runtime?: number | null } | null;
   release_date?: string;
   first_air_date?: string;
+  poster_path?: string | null;
+  number_of_seasons?: number;
+  number_of_episodes?: number;
+  seasons?: TmdbRawSeason[];
   imdb_id?: string | null;
   external_ids?: { imdb_id?: string | null };
   genres?: { name?: string }[];
   created_by?: { name?: string }[];
   credits?: { crew?: { job?: string; name?: string }[] };
+};
+
+/**
+ * 一季的概要信息，来自 `/tv/{id}` 的 `seasons[]`。
+ * 豆瓣把每一季当成独立条目，这里缓存整剧的季结构，用于把多条
+ * 豆瓣条目归并到同一部剧下展示。
+ */
+export type TmdbSeason = {
+  seasonNumber: number;
+  name: string;
+  airDate: string | null;
+  episodeCount: number;
+  posterPath: string | null;
+  voteAverage: number | null;
 };
 
 export type TmdbDetail = {
@@ -165,7 +192,29 @@ export type TmdbDetail = {
   imdbId: string | null;
   genres: string[];
   directors: string[];
+  /** 整剧海报，剧集不用季海报 */
+  posterPath: string | null;
+  /** 总季数 / 总集数，仅剧集有 */
+  seasonCount: number | null;
+  episodeCount: number | null;
+  /** 分季结构，已滤掉特辑（season_number = 0） */
+  seasons: TmdbSeason[];
 };
+
+/** 季结构的原始字段容错：缺 season_number 的条目直接丢掉。 */
+function normalizeSeasons(raw: TmdbRawSeason[] | undefined): TmdbSeason[] {
+  return (raw ?? [])
+    .filter((s) => typeof s.season_number === "number" && s.season_number > 0)
+    .map((s) => ({
+      seasonNumber: s.season_number as number,
+      name: s.name || `第 ${s.season_number} 季`,
+      airDate: s.air_date || null,
+      episodeCount: s.episode_count ?? 0,
+      posterPath: s.poster_path ?? null,
+      voteAverage: typeof s.vote_average === "number" && s.vote_average > 0 ? s.vote_average : null,
+    }))
+    .sort((a, b) => a.seasonNumber - b.seasonNumber);
+}
 
 /**
  * 拉一部作品在 TMDB 上的详情，补齐豆瓣列表页没有的字段。
@@ -210,6 +259,10 @@ export async function tmdbDetail(
       imdbId: (isTv ? body.external_ids?.imdb_id : body.imdb_id) || null,
       genres: (body.genres ?? []).map((g) => g.name ?? "").filter(Boolean),
       directors,
+      posterPath: body.poster_path ?? null,
+      seasonCount: isTv ? body.number_of_seasons ?? null : null,
+      episodeCount: isTv ? body.number_of_episodes ?? null : null,
+      seasons: isTv ? normalizeSeasons(body.seasons) : [],
     };
   } catch {
     return null;
@@ -287,14 +340,29 @@ function toArabicSeason(raw: string): number | null {
   return Number(arabic) || null;
 }
 
+/**
+ * 从标题里解析季号。
+ * 取第一个「第X季」标记——「剑来 第一季·第二季」这类标题按第一季处理。
+ */
+export function parseSeasonNumber(title: string): number | null {
+  const m = title.match(/第\s*([一二三四五六七八九十\d]+)\s*季/);
+  return m?.[1] ? toArabicSeason(m[1]) : null;
+}
+
+/**
+ * 剥掉「第X季」及其后的内容，得到整剧名。
+ * 豆瓣把每一季当作独立条目，展示时要用整剧名。
+ */
+export function baseTitleOf(title: string): string {
+  const m = title.match(/^(.*?)\s*第\s*[一二三四五六七八九十\d]+\s*季/);
+  return m?.[1]?.trim() || title.trim();
+}
+
 /** 策略 C：中文名去掉「第X季」后 search/tv，并要求该季真实存在。 */
 async function strategyC(input: MatchInput): Promise<MatchHit | null> {
-  const m = input.titleCn.match(/^(.*?)(?:第\s*([一二三四五六七八九十\d]+)\s*季)?$/);
-  const base = (m?.[1] || input.titleCn).trim();
-  if (!m?.[2] || !base) return null; // 无季数标识的条目不走剧集路径
-
-  const season = toArabicSeason(m[2]);
-  if (!season) return null;
+  const season = parseSeasonNumber(input.titleCn);
+  const base = baseTitleOf(input.titleCn);
+  if (!season || !base) return null; // 无季数标识的条目不走剧集路径
 
   const { results } = await tmdb("search/tv", { query: base }, "tv");
   const first = results[0];
@@ -318,12 +386,12 @@ export async function matchWork(input: MatchInput): Promise<MatchOutcome> {
   const attempts: MatchHit[] = [];
 
   const a = await strategyA(input);
-  if (a?.yearOk !== false) return a ? { ok: true, hit: a } : { ok: false, reason: "no_match", detail: "A 无结果", score: null };
+  if (a && a.yearOk !== false) return { ok: true, hit: a };
   if (a) attempts.push(a);
 
   await sleep(STRATEGY_GAP_MS);
   const b = await strategyB(input);
-  if (b?.yearOk !== false) return b ? { ok: true, hit: b } : { ok: false, reason: "no_match", detail: "B 无结果", score: null };
+  if (b && b.yearOk !== false) return { ok: true, hit: b };
   if (b) attempts.push(b);
 
   await sleep(STRATEGY_GAP_MS);

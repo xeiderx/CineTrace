@@ -1,0 +1,1 @@
+ALTER TABLE `work` ADD `seasons_json` text DEFAULT '[]' NOT NULL;
