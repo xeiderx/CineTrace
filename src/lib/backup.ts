@@ -516,19 +516,17 @@ export function importBackup(file: BackupFile): ImportStats {
 
 /**
  * 待补 TMDB 元数据的作品：有 tmdbId，但要么从没同步过详情，
- * 要么国家与主演都还是空的。
+ * 要么主演还是空的。
  *
- * 后一条是为存量数据准备的——它们当年同步过，那时还不抓这两个字段，
- * 只按 metadata_synced_at 判会永远漏掉。用「且」而非「或」：
- * 只要同步过一次就会填上至少一项，不会因为某部片恰好没有其中一个字段
- * 而在每次同步里被反复重拉。
+ * 后一条是为存量数据准备的——它们当年同步过，那时还不抓主演，
+ * 只按 metadata_synced_at 判会永远漏掉。
+ * 判据只看主演：它是后加的字段，旧同步代码从没写过，必然为空；
+ * 而国家当年是从豆瓣列表页的 item.country 写进去的，存量数据里非空，
+ * 拿它当判据会一条都判不出来。
  */
 const pendingMetadataWhere = and(
   isNotNull(work.tmdbId),
-  or(
-    isNull(work.metadataSyncedAt),
-    and(eq(work.countries, "[]"), eq(work.cast, "[]")),
-  ),
+  or(isNull(work.metadataSyncedAt), eq(work.cast, "[]")),
 );
 
 /** 待补 TMDB 元数据的作品数。 */

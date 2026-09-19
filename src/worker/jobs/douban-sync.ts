@@ -414,18 +414,18 @@ type IssueReporter = (
  * 元数据是否已补齐、无需再调 TMDB。
  * 匹配失败的条目不算完成——策略修好后要能自动重试；
  * 剧集还要求 seasons_json 非空，以便旧数据补上季结构；
- * 国家与主演是后加的字段，旧数据两者皆空，这里一并要求，
+ * 主演是后加的字段，旧数据必然为空，这里要求，
  * 否则这一轮同步不会去补，界面上就永远看不到。
- * 判「两者皆空」而非「任一为空」：都填过一次就不再重拉，
- * 免得某部片恰好没有其中一个字段时每轮都白跑一趟 TMDB。
+ * 判据只用主演：国家当年是从豆瓣列表页写进去的，存量数据里非空，
+ * 拿它当判据一条都判不出来。
  */
 function isMetadataComplete(row: typeof work.$inferSelect | undefined): boolean {
   if (!row) return false;
   if (row.matchStatus !== "matched" && row.matchStatus !== "manual") return false;
   if (!row.metadataSyncedAt) return false;
   if (row.mediaType === "tv" && row.tmdbId !== null && row.seasonsJson === "[]") return false;
-  // 国家与主演都空 ⇒ 是老数据（当年还不抓这两项），需要重拉一次
-  if (row.countries === "[]" && row.cast === "[]") return false;
+  // 主演为空 ⇒ 是老数据（当年还不抓这项），需要重拉一次
+  if (row.cast === "[]") return false;
   return true;
 }
 
