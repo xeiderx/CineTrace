@@ -94,6 +94,8 @@ export async function saveSyncSettingsAction(
 
   // Switch 旁显式放的 hidden input，值为 "true" / "false"
   const enabled = formData.get("sync.enabled") === "true";
+  const syncWatching = formData.get("douban.syncWatching") === "true";
+  const syncWish = formData.get("douban.syncWish") === "true";
   if (enabled && !uid) {
     return { error: "启用同步前请先填写豆瓣 ID" };
   }
@@ -106,6 +108,8 @@ export async function saveSyncSettingsAction(
 
   setSetting("douban.uid", uid);
   setSetting("sync.enabled", enabled);
+  setSetting("douban.syncWatching", syncWatching);
+  setSetting("douban.syncWish", syncWish);
   setSetting("sync.windowStart", windowStart);
   setSetting("sync.windowEnd", windowEnd);
   setSetting("sync.windowJitterMin", jitterMin);

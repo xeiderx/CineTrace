@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNotNull, isNull, like, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, like, ne, or, sql } from "drizzle-orm";
 import type { AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 import { db } from "@/db";
 import {
@@ -427,6 +427,7 @@ export type OverviewStats = {
 export function getOverviewStats(): OverviewStats {
   const workCount = countWorks();
 
+  // 只统计「看过」：想看/在看还没真正看完，混进来会把记录数与累计时长撑大
   const rows = db
     .select({
       rating: viewRecord.rating,
@@ -438,6 +439,7 @@ export function getOverviewStats(): OverviewStats {
     })
     .from(viewRecord)
     .leftJoin(work, eq(work.id, viewRecord.workId))
+    .where(eq(viewRecord.status, "watched"))
     .all();
 
   let totalMinutes = 0;
@@ -522,12 +524,13 @@ export function listWorksByCastId(personId: number): PersonWork[] {
     .all();
 }
 
-/** 最近观看：概览页的时间线 */
+/** 最近观看：概览页的时间线。「想看」只是标记，不算观看，排除掉 */
 export function listRecentWatches(limit = 8): RecentWatch[] {
   return db
     .select({ record: viewRecord, work })
     .from(viewRecord)
     .leftJoin(work, eq(work.id, viewRecord.workId))
+    .where(ne(viewRecord.status, "wish"))
     .orderBy(desc(viewRecord.watchedAt), desc(viewRecord.id))
     .limit(limit)
     .all();

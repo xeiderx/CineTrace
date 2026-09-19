@@ -1,10 +1,11 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { syncIssue, viewRecord, work, type NewWork } from "@/db/schema";
-import { getSetting } from "@/lib/settings";
+import { getSetting, setSetting } from "@/lib/settings";
+import { VIEW_STATUS_LABELS, type ViewStatus } from "@/lib/labels";
 import { archiveRaw } from "@/lib/douban/archive";
 import { isBlocked, needsLogin, req } from "@/lib/douban/client";
-import { PARSER_VERSION, parseCollectTotal, parseListPage, type ListPageItem } from "@/lib/douban/parse";
+import { PARSER_VERSION, parseListPage, parseListTotal, type ListPageItem } from "@/lib/douban/parse";
 import {
   baseTitleOf,
   hasTmdbKey,
@@ -24,7 +25,11 @@ import { randomInt, sleep, throttle } from "../throttle";
  *
  * 关键设计：
  * - 幂等：view_record.sourceKey = `douban:{id}`，重跑不会产生重复记录
- * - 增量：列表页每轮全量翻（只花翻页等待），已同步过元数据的条目不再调 TMDB
+ * - 增量早停：常规轮每个列表只抓第 1 页，遇到库里已有且元数据齐全的条目就停。
+ *   豆瓣列表按标记时间倒序，新条目必定落在首页，所以首页翻完就够发现新增；
+ *   用户事后修改老评分/短评这类变动发现不了，交给每周一次的全量回扫。
+ * - 三列表同轮抓取，顺序固定「想看 → 在看 → 看过」：sourceKey 全局唯一，
+ *   同一条目跨列表只能留一条记录，靠这个顺序让优先级高的状态最后写入、覆盖前者。
  * - 整季归并：豆瓣把每一季当作独立条目，这里按 TMDB 的 `(mediaType, tmdbId)`
  *   归到同一行 work，季信息记在 seasons_json，每季仍各自写一条 view_record
  * - 手动优先：matchStatus 为 manual 的条目不再自动改写绑定关系
@@ -34,10 +39,10 @@ import { randomInt, sleep, throttle } from "../throttle";
  */
 
 const DOUBAN_ORIGIN = "https://movie.douban.com";
-/** 豆瓣 collect 页固定每页 15 条 */
-const COLLECT_PAGE_SIZE = 15;
+/** 豆瓣列表页固定每页 15 条 */
+const LIST_PAGE_SIZE = 15;
 /**
- * 翻页间隔区间（毫秒）。豆瓣列表页是全量翻的，一轮上百次请求，
+ * 翻页间隔区间（毫秒）。全量回扫一轮上百次请求，
  * 所以刻意比 TMDB 侧慢得多；这里取随机区间而非固定值——
  * 固定 5 秒的机械节奏是最典型的机器特征，比等久一点更容易被拦。
  */
@@ -45,14 +50,26 @@ const PAGE_GAP_MIN_MS = 5000;
 const PAGE_GAP_MAX_MS = 12_000;
 /** 400 页上限：防止总数解析异常导致无限翻页 */
 const MAX_START = 6000;
+/** 两次全量回扫的最小间隔：常规轮靠它决定这轮要不要完整翻页 */
+const FULL_SYNC_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * 要抓的三个豆瓣列表。顺序即优先级，必须从低到高——
+ * 同一条目在多个列表中时，后面的状态会覆盖前面的（已看胜出在看，在看胜出想看）。
+ */
+const LISTS: ReadonlyArray<{ status: ViewStatus; path: string }> = [
+  { status: "wish", path: "wish" },
+  { status: "watching", path: "do" },
+  { status: "watched", path: "collect" },
+];
 
 /** 未知媒体类型的兜底猜测：带「第X季」标识的按剧集处理。 */
 function guessMediaType(titleCn: string): "movie" | "tv" {
   return /第\s*[一二三四五六七八九十\d]+\s*季/.test(titleCn) ? "tv" : "movie";
 }
 
-function collectUrl(uid: string, start: number): string {
-  return `${DOUBAN_ORIGIN}/people/${encodeURIComponent(uid)}/collect?sort=time&start=${start}`;
+function listUrl(uid: string, path: string, start: number): string {
+  return `${DOUBAN_ORIGIN}/people/${encodeURIComponent(uid)}/${path}?sort=time&start=${start}`;
 }
 
 export type DoubanSyncProgress = {
@@ -65,6 +82,8 @@ export type DoubanSyncProgress = {
 type DoubanSyncOptions = {
   /** 手动同步时忽略 sync.enabled 总开关 */
   force?: boolean;
+  /** 强制完整翻页，忽略「每周一次」的全量间隔（手动同步用） */
+  full?: boolean;
   onProgress?: (progress: DoubanSyncProgress) => void;
 };
 
@@ -72,7 +91,7 @@ export const doubanSyncJob: Job = {
   name: "douban-sync",
   kind: "douban-html",
   intervalMs: 6 * 60 * 60 * 1000,
-  // 列表页全量翻，上百页配上 5~12 秒的随机间隔，最坏要跑半小时以上；
+  // 全量回扫时上百页配上 5~12 秒的随机间隔，最坏要跑半小时以上；
   // 锁必须比任务长，否则兜底过期会让两个进程同时抓同一个账号
   lockTtlMs: 60 * 60 * 1000,
   run: () => runDoubanSync(),
@@ -90,7 +109,7 @@ export async function runManualDoubanSync(
   const job: Job = {
     ...doubanSyncJob,
     run: async () => {
-      result = await runDoubanSync({ force: true, onProgress });
+      result = await runDoubanSync({ force: true, full: true, onProgress });
       return result;
     },
   };
@@ -99,8 +118,8 @@ export async function runManualDoubanSync(
 }
 
 /**
- * 抓取一轮豆瓣「我看过的」并落库。定时任务与手动同步共用此实现，
- * 差别只在是否受总开关约束、以及要不要对外汇报进度。
+ * 抓取一轮豆瓣的「想看 / 在看 / 看过」三列表并落库。定时任务与手动同步共用此实现，
+ * 差别只在是否受总开关约束、要不要强制全量、以及要不要对外汇报进度。
  */
 async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult> {
   // 以下三种都属于「没真正抓取」：连一个请求都没发出去。
@@ -138,13 +157,17 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
       .run();
   };
 
-  /** 处理列表页的一条条目：匹配 → 补 TMDB 详情 → 落库。 */
-  const processItem = async (item: ListPageItem) => {
+  /**
+   * 处理列表页的一条条目：匹配 → 补 TMDB 详情 → 落库。
+   * 返回 true 表示这条记录此前已在库里、且元数据齐全——
+   * 调用方据此判断这一页已经没有新东西，可以早停。
+   */
+  const processItem = async (item: ListPageItem, status: ViewStatus): Promise<boolean> => {
     stats.itemsSeen += 1;
     const { doubanId, titleCn } = item;
     if (!doubanId) {
       issue("parse", null, titleCn, "列表页条目缺少 subject id");
-      return;
+      return false;
     }
 
     const sourceKey = `douban:${doubanId}`;
@@ -174,10 +197,13 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
       workId,
       source: "douban",
       sourceItemId: doubanId,
-      status: "watched" as const,
-      watchedAt: item.markedAt,
-      rating: item.rating,
-      comment: item.comment,
+      status,
+      // 「在看」页的日期是「开始看」，写 startedAt 才不会被概览时间线当成看完；
+      // 想看/看过写的都是标记日期
+      ...(status === "watching" ? { startedAt: item.markedAt } : { watchedAt: item.markedAt }),
+      // 想看/在看页没有评分，null 不能拿去覆盖用户已有的评分
+      ...(status === "watched" || item.rating !== null ? { rating: item.rating } : {}),
+      ...(item.comment !== null ? { comment: item.comment } : {}),
       // 豆瓣一季一条记录，季号落在记录上，详情页据此按季展示；
       // 标题里没有季标识的条目不写，避免覆盖手工填的进度
       ...(season !== null ? { progressSeason: season } : {}),
@@ -191,63 +217,109 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
 
     if (existingRecord) stats.itemsUpdated += 1;
     else stats.itemsNew += 1;
+
+    // 「匹配失败」的元数据不算齐全，不能作为早停依据，否则卡在首页永远重试不了
+    return existingRecord !== undefined && isMetadataComplete(linkedWork);
   };
 
   /* ------------------------------ 抓取主循环 ------------------------------ */
 
+  // 三种情况要完整翻页：首次运行（没有全量时间戳）、距上次满一周、手动触发
+  const full = options.full === true || isFullSyncDue();
+
+  // 「看过」是主列表必抓；两个小列表各有开关。
+  // filter 只删项不重排，想看 → 在看 → 看过的覆盖优先级仍由 LISTS 保证。
+  const enabledLists = LISTS.filter((list) => {
+    if (list.status === "wish") return getSetting("douban.syncWish");
+    if (list.status === "watching") return getSetting("douban.syncWatching");
+    return true;
+  });
+
   // 预热：先拿到 bid 等基础 Cookie，首屏直接请求容易被判为异常流量
   await req(`${DOUBAN_ORIGIN}/`);
 
-  const firstUrl = collectUrl(uid, 0);
-  const first = await req(firstUrl);
-  if (first.status !== 200 || isBlocked(first.text) || needsLogin(first.text)) {
-    issue("blocked", null, null, `列表页首页不可用 status=${first.status}`);
-    return failure(stats, "豆瓣拒绝访问（首页即受限），本轮中止");
-  }
-
-  const total = parseCollectTotal(first.text);
-  let html = first.text;
-  let processed = 0;
-  let start = 0;
   let stopped: string | null = null;
+  let totalSum = 0;
+  let totalKnown = false;
 
-  while (start <= MAX_START) {
-    const url = collectUrl(uid, start);
-    if (start > 0) {
-      await sleep(randomInt(PAGE_GAP_MIN_MS, PAGE_GAP_MAX_MS));
+  for (const list of enabledLists) {
+    const label = VIEW_STATUS_LABELS[list.status];
+    let processed = 0;
+    let start = 0;
+    let blockedAtFirstPage = false;
+
+    while (start <= MAX_START) {
+      const url = listUrl(uid, list.path, start);
+      // 翻页之间必须留随机间隔，否则整轮节奏过于机械
+      if (start > 0) await sleep(randomInt(PAGE_GAP_MIN_MS, PAGE_GAP_MAX_MS));
+
       const page = await req(url);
+      const pageNo = start / LIST_PAGE_SIZE + 1;
       if (page.status !== 200 || isBlocked(page.text) || needsLogin(page.text)) {
-        issue("blocked", null, null, `列表页第 ${start / COLLECT_PAGE_SIZE + 1} 页受限 status=${page.status}`);
-        stopped = `列表页第 ${start / COLLECT_PAGE_SIZE + 1} 页起被拒绝访问，本轮提前结束`;
+        issue("blocked", null, null, `${label}列表第 ${pageNo} 页受限 status=${page.status}`);
+        blockedAtFirstPage = start === 0;
+        stopped = blockedAtFirstPage
+          ? `豆瓣拒绝访问（${label}列表首页即受限），本轮中止`
+          : `${label}列表第 ${pageNo} 页起被拒绝访问，本轮提前结束`;
         break;
       }
-      html = page.text;
-    }
 
-    archiveRaw({ url, kind: "list", body: html, parserVersion: PARSER_VERSION });
+      const html = page.text;
+      archiveRaw({ url, kind: "list", body: html, parserVersion: PARSER_VERSION });
 
-    const items = parseListPage(html);
-    if (items.length === 0) break; // 翻到末页
-
-    for (const item of items) {
-      try {
-        await processItem(item);
-      } catch (error) {
-        // 单条失败不应中断整轮同步
-        issue("parse", item.doubanId, item.titleCn, error instanceof Error ? error.message : String(error));
+      const pageTotal = parseListTotal(html);
+      if (pageTotal !== null && start === 0) {
+        totalSum += pageTotal;
+        totalKnown = true;
       }
+
+      const items = parseListPage(html);
+      if (items.length === 0) break; // 翻到末页
+
+      // 早停信号：这一页里出现了库里已有且元数据齐全的条目。
+      // 不立刻跳出，是因为同页可能还夹着「匹配失败」待重试的条目，得一并处理掉。
+      let sawKnown = false;
+      for (const item of items) {
+        try {
+          if (await processItem(item, list.status)) sawKnown = true;
+        } catch (error) {
+          // 单条失败不应中断整轮同步
+          issue("parse", item.doubanId, item.titleCn, error instanceof Error ? error.message : String(error));
+        }
+      }
+
+      processed += items.length;
+      options.onProgress?.({ seen: stats.itemsSeen, total: totalKnown ? totalSum : null });
+
+      start += LIST_PAGE_SIZE;
+      // 增量轮：首页见到已知条目就说明后面只会更旧，不必再翻
+      if (!full && sawKnown) break;
+      if (pageTotal !== null && processed >= pageTotal) break;
+      if (items.length < LIST_PAGE_SIZE) break; // 不满一页即末页
     }
 
-    processed += items.length;
-    options.onProgress?.({ seen: stats.itemsSeen, total });
-    start += COLLECT_PAGE_SIZE;
-    if (total !== null && processed >= total) break;
-    if (items.length < COLLECT_PAGE_SIZE) break; // 不满一页即末页
+    if (blockedAtFirstPage) break; // 首页都不通，后面的列表同样抓不到
   }
 
-  const summary = `共 ${stats.itemsSeen} 条（新增 ${stats.itemsNew} / 更新 ${stats.itemsUpdated}），错误 ${stats.errorCount} 条`;
-  if (stopped) return failure(stats, stopped, start);
-  return { ...stats, cursor: String(start), message: summary };
+  // 完整跑完才记全量时间戳；中途被拦的话下周之前的常规轮仍是增量，不影响正确性
+  if (full && stopped === null) setSetting("douban.lastFullSyncAt", new Date().toISOString());
+
+  const mode = full ? "全量" : "增量";
+  const summary = `${mode}同步共 ${stats.itemsSeen} 条（新增 ${stats.itemsNew} / 更新 ${stats.itemsUpdated}），错误 ${stats.errorCount} 条`;
+  if (stopped) return failure(stats, stopped);
+  return { ...stats, message: summary };
+}
+
+/**
+ * 是否该做完整回扫。常规轮只抓每个列表的首页就早停，
+ * 用户事后修改的老评分/短评只能靠每周一次的全量发现。
+ */
+function isFullSyncDue(): boolean {
+  const last = String(getSetting("douban.lastFullSyncAt") ?? "").trim();
+  if (!last) return true; // 从没全量过
+  const at = Date.parse(last);
+  if (Number.isNaN(at)) return true;
+  return Date.now() - at >= FULL_SYNC_INTERVAL_MS;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -393,7 +465,6 @@ function buildWorkValues(
 function failure(
   stats: { itemsSeen: number; itemsNew: number; itemsUpdated: number; errorCount: number },
   message: string,
-  cursor: number | null = null,
 ): JobResult {
-  return { ...stats, cursor: cursor === null ? null : String(cursor), partial: true, message };
+  return { ...stats, partial: true, message };
 }

@@ -122,7 +122,11 @@ function ViewRecordItem({
           </span>
           <RatingStars value={record.rating} />
           <span className="text-xs text-muted-foreground">
-            {record.watchedAt ? `标记于 ${record.watchedAt}` : "未填写日期"}
+            {record.watchedAt
+              ? `标记于 ${record.watchedAt}`
+              : record.startedAt
+                ? `开始于 ${record.startedAt}`
+                : "未填写日期"}
           </span>
           <PlatformChip record={record} />
         </div>

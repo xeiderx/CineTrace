@@ -39,6 +39,12 @@ export function SyncSettings({
 }) {
   const router = useRouter();
   const [enabled, setEnabled] = useState(initial["sync.enabled"] === true);
+  const [syncWatching, setSyncWatching] = useState(
+    initial["douban.syncWatching"] !== false,
+  );
+  const [syncWish, setSyncWish] = useState(
+    initial["douban.syncWish"] !== false,
+  );
 
   const [state, formAction, pending] = useActionState<FormState, FormData>(
     saveSyncSettingsAction,
@@ -99,9 +105,10 @@ export function SyncSettings({
       <div>
         <h2 className="text-base font-medium">豆瓣同步</h2>
         <p className="text-xs text-muted-foreground">
-          抓取豆瓣「我看过的」列表，逐条匹配 TMDB 元数据后写入媒体库。worker
-          容器每 6 小时执行一次，重复抓取不会产生重复记录；也可以点「立即同步」
-          手动跑一轮。
+          抓取豆瓣「想看 / 在看 / 看过」三个列表，逐条匹配 TMDB 元数据后写入媒体库。
+          worker 容器每 6 小时执行一次：常规轮只看每个列表的最新一页，遇到已有条目
+          即停，所以开销极小；每周做一次完整回扫，捡回你事后修改的老评分与短评。
+          重复抓取不会产生重复记录；也可以点「立即同步」手动跑一轮完整抓取。
         </p>
       </div>
 
@@ -142,6 +149,46 @@ export function SyncSettings({
             id="sync.enabled"
             checked={enabled}
             onCheckedChange={setEnabled}
+          />
+        </div>
+
+        <div className="flex items-center justify-between gap-4 border-t border-border/60 pt-5">
+          <div className="space-y-1">
+            <Label htmlFor="douban.syncWatching">同步「在看」</Label>
+            <p className="text-xs text-muted-foreground">
+              抓取豆瓣「在看」列表。这个列表通常只有几十条，一轮只需一次请求。
+            </p>
+          </div>
+          {/* 显式携带值：radix 的 bubble input 不保证提交，不能依赖 */}
+          <input
+            type="hidden"
+            name="douban.syncWatching"
+            value={syncWatching ? "true" : "false"}
+          />
+          <Switch
+            id="douban.syncWatching"
+            checked={syncWatching}
+            onCheckedChange={setSyncWatching}
+          />
+        </div>
+
+        <div className="flex items-center justify-between gap-4 border-t border-border/60 pt-5">
+          <div className="space-y-1">
+            <Label htmlFor="douban.syncWish">同步「想看」</Label>
+            <p className="text-xs text-muted-foreground">
+              抓取豆瓣「想看」列表。不想让待看片单进媒体库时关掉即可。
+            </p>
+          </div>
+          {/* 显式携带值：radix 的 bubble input 不保证提交，不能依赖 */}
+          <input
+            type="hidden"
+            name="douban.syncWish"
+            value={syncWish ? "true" : "false"}
+          />
+          <Switch
+            id="douban.syncWish"
+            checked={syncWish}
+            onCheckedChange={setSyncWish}
           />
         </div>
 
@@ -201,8 +248,7 @@ export function SyncSettings({
             />
             <p className="text-xs text-muted-foreground">
               窗口开启后，第一次抓取在这个区间内随机推迟，避免每天准点开跑。建议
-              15 - 30 分钟；上限不要超过窗口时长，否则随机量会落到窗口之外、退回准点开跑，
-              起不到打散作用。填 0 即到点就跑。
+              15 - 30 分钟。
             </p>
           </div>
         </div>
@@ -236,8 +282,7 @@ export function SyncSettings({
             />
             <p className="text-xs text-muted-foreground">
               每次请求前的随机等待区间，固定节奏最容易触发风控。建议 3 - 8
-              秒；上限调得过大（例如接近 120 秒）会让一轮全量抓取远超任务锁的 1
-              小时，锁中途过期后可能被另一轮抓取同时进入。
+              秒。
             </p>
           </div>
         </div>

@@ -57,8 +57,9 @@ const COUNTRIES = new Set([
 const YEAR_RE = /\b(19\d{2}|20\d{2})\b/;
 
 /**
- * 解析「看过」列表页。
- * 每页固定 15 条（豆瓣的 collect 页约定），翻页靠 start 参数。
+ * 解析豆瓣个人页的影视列表页。
+ * 「看过 /collect」「在看 /do」「想看 /wish」三处 HTML 结构一致，共用此解析。
+ * 每页固定 15 条（豆瓣的约定），翻页靠 start 参数。
  */
 export function parseListPage(html: string): ListPageItem[] {
   const $ = load(html);
@@ -97,11 +98,15 @@ export function parseListPage(html: string): ListPageItem[] {
 }
 
 /**
- * 从列表页 HTML 里读出「看过」总数。
- * 豆瓣两种排版都出现过：`看过(2100)` 与 `2100 部看过`。
+ * 从列表页 HTML 里读出条目总数。
+ * 三个列表的 h1 文案各不相同且带用户名，形如
+ * 「阿北看过的影视(218)」「阿北在看的电视剧(17)」「阿北想看的影视(77)」，
+ * 所以不能拿「看过 + 括号」这种固定搭配去匹配，只能从 h1 里取括号中的数字。
  */
-export function parseCollectTotal(html: string): number | null {
-  const m = html.match(/看过\s*[（(]\s*(\d+)\s*[)）]/) || html.match(/(\d+)\s*部看过/);
+export function parseListTotal(html: string): number | null {
+  const m =
+    html.match(/<h1>[\s\S]{0,80}?[（(]\s*(\d+)\s*[)）]\s*<\/h1>/) ||
+    html.match(/(\d+)\s*部[^<]{0,4}(?:看过|在看|想看)/);
   return m ? Number(m[1]) : null;
 }
 

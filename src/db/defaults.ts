@@ -15,6 +15,19 @@ export const DEFAULT_PLATFORMS = [
 export const DEFAULT_SETTINGS = {
   "douban.uid": "",
   "sync.enabled": false,
+  /**
+   * 是否抓取「在看」「想看」两个小列表。
+   * 「看过」是主列表必须抓；这两个列表通常只有几十条，抓一轮的代价只有首页一次请求，
+   * 但也有人只想同步已看记录，所以留开关。
+   */
+  "douban.syncWish": true,
+  "douban.syncWatching": true,
+  /**
+   * 上一次「全量回扫」的完成时间（ISO 字符串）。常规轮只抓每个列表的首页、
+   * 遇到已知条目即停，靠这个时间戳每周放行一次完整翻页——
+   * 用来捡回用户事后修改的老条目（评分、短评）与被删改的条目。
+   */
+  "douban.lastFullSyncAt": "",
   /** 允许抓取的作息窗口（本地时区），避开深夜以免异常流量 */
   "sync.windowStart": "09:00",
   "sync.windowEnd": "23:00",
