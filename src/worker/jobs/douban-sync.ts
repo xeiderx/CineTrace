@@ -6,10 +6,12 @@ import { VIEW_STATUS_LABELS, type ViewStatus } from "@/lib/labels";
 import { archiveRaw } from "@/lib/douban/archive";
 import { isBlocked, needsLogin, req } from "@/lib/douban/client";
 import { PARSER_VERSION, parseHasNext, parseListPage, parseListTotal, type ListPageItem } from "@/lib/douban/parse";
+import { parseSeasons } from "@/lib/queries";
 import {
   baseTitleOf,
   hasTmdbKey,
   matchWork,
+  parseSeasonHint,
   parseSeasonNumber,
   tmdbDetail,
   type MatchHit,
@@ -194,7 +196,7 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
       if (resolved !== null) workId = resolved;
     }
 
-    const season = parseSeasonNumber(titleCn);
+    const season = resolveProgressSeason(titleCn, workId);
     // 豆瓣三个列表互斥，把「看过」改成「想看」时条目会离开 collect 列表。
     // 状态跟豆瓣走，但原有的看过日期不能被这次改动抹掉——那是真实看过的时间，
     // 以后二刷三刷还要靠它回溯。所以非「看过」的列表只在记录还没有日期时才写入。
@@ -427,6 +429,30 @@ function isMetadataComplete(row: typeof work.$inferSelect | undefined): boolean 
   // 主演为空 ⇒ 是老数据（当年还不抓这项），需要重拉一次
   if (row.cast === "[]") return false;
   return true;
+}
+
+/**
+ * 决定这条豆瓣条目该记成第几季。
+ *
+ * 「第X季」是明确写法，直接采信；「模范出租车3」这种结尾数字只是猜测，
+ * 要拿作品真实的季列表核对——猜错会让标记挂到别的季上，
+ * 而电影标题（《美国队长4》）也长这样，所以类型和季列表缺一不可。
+ */
+function resolveProgressSeason(titleCn: string, workId: number | null): number | null {
+  const explicit = parseSeasonNumber(titleCn);
+  if (explicit !== null) return explicit;
+
+  const guess = parseSeasonHint(titleCn);
+  if (guess === null || workId === null) return null;
+
+  const row = db
+    .select({ mediaType: work.mediaType, seasonsJson: work.seasonsJson })
+    .from(work)
+    .where(eq(work.id, workId))
+    .get();
+  if (row?.mediaType !== "tv") return null;
+
+  return parseSeasons(row.seasonsJson).some((s) => s.seasonNumber === guess) ? guess : null;
 }
 
 /**

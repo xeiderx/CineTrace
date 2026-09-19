@@ -32,6 +32,8 @@ import type { Platform, ViewRecord } from "@/db/schema";
 
 /** 平台下拉的哨兵值：Radix Select 不接受空字符串作为 value */
 const USE_DEFAULT = "__default__";
+/** 季下拉的「未标记」哨兵值，parseInt 解析不出来，action 会落成 null */
+const NO_SEASON = "__none__";
 
 /**
  * 新增 / 编辑一条观影流水。
@@ -42,12 +44,15 @@ export function ViewRecordDialog({
   mediaType,
   platforms,
   defaultPlatformName,
+  seasons,
   record,
 }: {
   workId: number;
   mediaType: string;
   platforms: Platform[];
   defaultPlatformName: string | null;
+  /** 该剧 TMDB 的季列表；为空时季号只能手填 */
+  seasons: { seasonNumber: number; name: string }[];
   record?: ViewRecord;
 }) {
   const isEdit = Boolean(record);
@@ -65,6 +70,14 @@ export function ViewRecordDialog({
   }
 
   const isTv = mediaType === "tv";
+
+  // 记录上已有的季号即便不在 TMDB 列表里也要保留，否则一保存就把它清掉了
+  const seasonOptions = Array.from(
+    new Set([
+      ...seasons.map((s) => s.seasonNumber),
+      ...(record?.progressSeason != null ? [record.progressSeason] : []),
+    ]),
+  ).sort((a, b) => a - b);
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -196,14 +209,37 @@ export function ViewRecordDialog({
               <div className="grid gap-4 sm:grid-cols-3">
                 <div className="space-y-2">
                   <Label htmlFor="progressSeason">看到第几季</Label>
-                  <Input
-                    id="progressSeason"
-                    name="progressSeason"
-                    type="number"
-                    min={0}
-                    defaultValue={record?.progressSeason ?? ""}
-                    placeholder="2"
-                  />
+                  {seasonOptions.length > 0 ? (
+                    <Select
+                      name="progressSeason"
+                      defaultValue={
+                        record?.progressSeason != null
+                          ? String(record.progressSeason)
+                          : NO_SEASON
+                      }
+                    >
+                      <SelectTrigger id="progressSeason" className="h-8 w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={NO_SEASON}>未标记</SelectItem>
+                        {seasonOptions.map((n) => (
+                          <SelectItem key={n} value={String(n)}>
+                            第 {n} 季
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <Input
+                      id="progressSeason"
+                      name="progressSeason"
+                      type="number"
+                      min={0}
+                      defaultValue={record?.progressSeason ?? ""}
+                      placeholder="2"
+                    />
+                  )}
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="progressEpisode">第几集</Label>

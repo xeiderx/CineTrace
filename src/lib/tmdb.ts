@@ -555,6 +555,21 @@ export function parseSeasonNumber(title: string): number | null {
 }
 
 /**
+ * 季号猜测：先按「第X季」认，认不出再看标题结尾的阿拉伯数字。
+ * 豆瓣对续季有两种写法——「怪奇物语 第五季」和「模范出租车3」，
+ * 只认前者会让后一种条目的标记挂不到 TMDB 的季结构上。
+ *
+ * 结尾数字只是猜测，库里有《美国队长4》这类电影，所以这里不区分影视，
+ * 调用方必须再用作品类型和该剧真实的季列表复核一次。
+ */
+export function parseSeasonHint(title: string): number | null {
+  const season = parseSeasonNumber(title);
+  if (season !== null) return season;
+  const m = title.match(/(\d{1,2})\s*$/);
+  return m ? Number(m[1]) : null;
+}
+
+/**
  * 剥掉「第X季」及其后的内容，得到整剧名。
  * 豆瓣把每一季当作独立条目，展示时要用整剧名。
  */

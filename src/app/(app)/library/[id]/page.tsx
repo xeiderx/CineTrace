@@ -88,11 +88,13 @@ function ViewRecordItem({
   mediaType,
   platforms,
   defaultPlatformName,
+  seasons,
 }: {
   record: ViewRecordWithPlatform;
   mediaType: string;
   platforms: Platform[];
   defaultPlatformName: string | null;
+  seasons: SeasonWithRecord[];
 }) {
   const progress = progressLabel({
     mediaType,
@@ -149,6 +151,7 @@ function ViewRecordItem({
           mediaType={mediaType}
           platforms={platforms}
           defaultPlatformName={defaultPlatformName}
+          seasons={seasons}
           record={record}
         />
         <ConfirmDeleteButton
@@ -278,6 +281,7 @@ export default async function WorkDetailPage({
             mediaType={item.mediaType}
             platforms={platforms}
             defaultPlatformName={defaultPlatform?.name ?? null}
+            seasons={seasons}
           />
           <WorkMatchDialog workId={item.id} workTitle={item.title} />
           <WorkFormDialog work={item} />
@@ -434,6 +438,7 @@ export default async function WorkDetailPage({
                 mediaType={item.mediaType}
                 platforms={platforms}
                 defaultPlatformName={defaultPlatform?.name ?? null}
+                seasons={seasons}
               />
             ))}
           </ul>
