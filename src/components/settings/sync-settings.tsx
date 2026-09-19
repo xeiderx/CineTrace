@@ -174,29 +174,64 @@ export function SyncSettings({
 
         <div className="grid gap-4 border-t border-border/60 pt-5 sm:grid-cols-2">
           <div className="space-y-2">
-            <Label htmlFor="sync.minDelayMs">最小延迟（毫秒）</Label>
+            <Label htmlFor="sync.windowJitterMin">开窗随机延迟下限（分钟）</Label>
             <Input
-              id="sync.minDelayMs"
-              name="sync.minDelayMs"
+              id="sync.windowJitterMin"
+              name="sync.windowJitterMin"
               type="number"
-              min={500}
-              max={120_000}
-              step={100}
-              defaultValue={num(initial["sync.minDelayMs"], 3000)}
+              min={0}
+              max={180}
+              step={1}
+              defaultValue={num(initial["sync.windowJitterMin"], 15)}
               className="h-8 max-w-40"
             />
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="sync.maxDelayMs">最大延迟（毫秒）</Label>
+            <Label htmlFor="sync.windowJitterMax">开窗随机延迟上限（分钟）</Label>
             <Input
-              id="sync.maxDelayMs"
-              name="sync.maxDelayMs"
+              id="sync.windowJitterMax"
+              name="sync.windowJitterMax"
               type="number"
-              min={500}
-              max={120_000}
-              step={100}
-              defaultValue={num(initial["sync.maxDelayMs"], 8000)}
+              min={0}
+              max={180}
+              step={1}
+              defaultValue={num(initial["sync.windowJitterMax"], 30)}
+              className="h-8 max-w-40"
+            />
+            <p className="text-xs text-muted-foreground">
+              窗口开启后，第一次抓取在这个区间内随机推迟，避免每天准点开跑。建议
+              15 - 30 分钟；上限不要超过窗口时长，否则随机量会落到窗口之外、退回准点开跑，
+              起不到打散作用。填 0 即到点就跑。
+            </p>
+          </div>
+        </div>
+
+        <div className="grid gap-4 border-t border-border/60 pt-5 sm:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor="sync.minDelaySec">最小延迟（秒）</Label>
+            <Input
+              id="sync.minDelaySec"
+              name="sync.minDelaySec"
+              type="number"
+              min={1}
+              max={120}
+              step={1}
+              defaultValue={num(initial["sync.minDelaySec"], 3)}
+              className="h-8 max-w-40"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="sync.maxDelaySec">最大延迟（秒）</Label>
+            <Input
+              id="sync.maxDelaySec"
+              name="sync.maxDelaySec"
+              type="number"
+              min={1}
+              max={120}
+              step={1}
+              defaultValue={num(initial["sync.maxDelaySec"], 8)}
               className="h-8 max-w-40"
             />
             <p className="text-xs text-muted-foreground">

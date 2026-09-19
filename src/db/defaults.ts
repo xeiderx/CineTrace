@@ -18,9 +18,15 @@ export const DEFAULT_SETTINGS = {
   /** 允许抓取的作息窗口（本地时区），避开深夜以免异常流量 */
   "sync.windowStart": "09:00",
   "sync.windowEnd": "23:00",
-  /** 两次请求之间的随机延迟区间，防风控 */
-  "sync.minDelayMs": 3000,
-  "sync.maxDelayMs": 8000,
+  /**
+   * 窗口开启后的随机延迟区间（分钟）。跨夜积压的第一次抓取若总在开窗那一刻准点发生，
+   * 时间一长就是很明显的机械特征，这里让它落在 [下限, 上限] 内随机。
+   */
+  "sync.windowJitterMin": 15,
+  "sync.windowJitterMax": 30,
+  /** 两次请求之间的随机延迟区间（秒），防风控 */
+  "sync.minDelaySec": 3,
+  "sync.maxDelaySec": 8,
   "tmdb.language": "zh-CN",
   /** TMDB API Key（v3）。设置页填写，优先于环境变量 TMDB_API_KEY */
   "tmdb.apiKey": "",

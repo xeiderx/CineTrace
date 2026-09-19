@@ -1,5 +1,5 @@
 import { randomInt } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { db } from "./index";
 import { platform, setting, user } from "./schema";
 import { DEFAULT_PLATFORMS, DEFAULT_SETTINGS } from "./defaults";
@@ -16,6 +16,17 @@ import { hashPassword } from "@/lib/password";
 
 /** 首次部署的默认账号名。密码随机生成，避免公开仓库里的固定弱密码 */
 const DEFAULT_ADMIN_USERNAME = "admin";
+
+/**
+ * 已废弃的设置键。设置读取只做「默认值 + 库中行」的合并，从不删除多余键，
+ * 改过名的键会一直滞留在库里；这里在每次启动时顺手清掉。
+ * 只列明确作废的键，不动用户可能自行添加的其他设置。
+ */
+const OBSOLETE_SETTING_KEYS = [
+  /** 原名，单位毫秒；已改为 sync.minDelaySec / sync.maxDelaySec（秒） */
+  "sync.minDelayMs",
+  "sync.maxDelayMs",
+];
 
 /** 去掉了 0/O、1/l/I 等易混淆字符，方便照着日志手抄 */
 const PASSWORD_ALPHABET =
@@ -64,6 +75,14 @@ async function seed() {
     if (!exists) db.insert(setting).values({ key, value: JSON.stringify(value) }).run();
   }
   console.log(`设置：${Object.keys(DEFAULT_SETTINGS).length} 项已就绪`);
+
+  const removed = db
+    .delete(setting)
+    .where(inArray(setting.key, OBSOLETE_SETTING_KEYS))
+    .run();
+  if (removed.changes > 0) {
+    console.log(`设置：已清理 ${removed.changes} 项废弃键`);
+  }
 
   const envUsername = process.env.ADMIN_USERNAME?.trim();
   const envPassword = process.env.ADMIN_PASSWORD?.trim();

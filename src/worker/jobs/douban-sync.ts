@@ -94,7 +94,8 @@ export async function runManualDoubanSync(
       return result;
     },
   };
-  return { ran: await runJob(job), result };
+  const outcome = await runJob(job);
+  return { ran: outcome.ran, result };
 }
 
 /**
@@ -102,15 +103,18 @@ export async function runManualDoubanSync(
  * 差别只在是否受总开关约束、以及要不要对外汇报进度。
  */
 async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult> {
+  // 以下三种都属于「没真正抓取」：连一个请求都没发出去。
+  // 统一标 skipped，调度器不会把这轮算进 6 小时间隔，
+  // 于是总开关一开 / 配置一补好，下一轮 tick 就能立刻抓。
   if (!options.force && !getSetting("sync.enabled")) {
-    return { message: "同步开关已关闭，跳过" };
+    return { skipped: true, message: "同步开关已关闭，跳过" };
   }
   const uid = String(getSetting("douban.uid") ?? "").trim();
   if (!uid) {
-    return { partial: true, message: "未配置豆瓣用户 ID，跳过抓取" };
+    return { skipped: true, message: "未配置豆瓣用户 ID，跳过抓取" };
   }
   if (!hasTmdbKey()) {
-    return { partial: true, message: "未配置 TMDB_API_KEY，无法匹配作品元数据" };
+    return { skipped: true, message: "未配置 TMDB_API_KEY，无法匹配作品元数据" };
   }
 
   const stats = { itemsSeen: 0, itemsNew: 0, itemsUpdated: 0, errorCount: 0 };

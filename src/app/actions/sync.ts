@@ -35,8 +35,9 @@ const UID_RE = /^[A-Za-z0-9._-]+$/;
 /** TMDB v3 Key 是 32 位十六进制串，这里只做「不含空白/特殊字符」的粗校验 */
 const TMDB_KEY_RE = /^[A-Za-z0-9._-]+$/;
 
-const MIN_DELAY_FLOOR_MS = 500;
-const MAX_DELAY_CEIL_MS = 120_000;
+const MIN_DELAY_FLOOR_SEC = 1;
+const MAX_DELAY_CEIL_SEC = 120;
+const MAX_JITTER_CEIL_MIN = 180;
 
 /* -------------------------------------------------------------------------- */
 /*                                  同步设置                                    */
@@ -61,19 +62,34 @@ export async function saveSyncSettingsAction(
     return { error: "作息窗口请填 24 小时制的 HH:MM，例如 09:00" };
   }
 
-  const minDelayMs = int(formData, "sync.minDelayMs");
-  const maxDelayMs = int(formData, "sync.maxDelayMs");
-  if (minDelayMs == null || maxDelayMs == null) {
-    return { error: "请求延迟请填整数毫秒" };
+  const jitterMin = int(formData, "sync.windowJitterMin");
+  const jitterMax = int(formData, "sync.windowJitterMax");
+  if (jitterMin == null || jitterMax == null) {
+    return { error: "窗口随机延迟请填整数分钟" };
   }
-  if (minDelayMs < MIN_DELAY_FLOOR_MS) {
-    return { error: `最小延迟不应低于 ${MIN_DELAY_FLOOR_MS} 毫秒，太快容易触发风控` };
+  if (jitterMin < 0) {
+    return { error: "窗口随机延迟不能为负数" };
   }
-  if (maxDelayMs < minDelayMs) {
+  if (jitterMax < jitterMin) {
+    return { error: "窗口随机延迟上限不能小于下限" };
+  }
+  if (jitterMax > MAX_JITTER_CEIL_MIN) {
+    return { error: `窗口随机延迟上限不应超过 ${MAX_JITTER_CEIL_MIN} 分钟` };
+  }
+
+  const minDelaySec = int(formData, "sync.minDelaySec");
+  const maxDelaySec = int(formData, "sync.maxDelaySec");
+  if (minDelaySec == null || maxDelaySec == null) {
+    return { error: "请求延迟请填整数秒" };
+  }
+  if (minDelaySec < MIN_DELAY_FLOOR_SEC) {
+    return { error: `最小延迟不应低于 ${MIN_DELAY_FLOOR_SEC} 秒，太快容易触发风控` };
+  }
+  if (maxDelaySec < minDelaySec) {
     return { error: "最大延迟不能小于最小延迟" };
   }
-  if (maxDelayMs > MAX_DELAY_CEIL_MS) {
-    return { error: `最大延迟不应超过 ${MAX_DELAY_CEIL_MS} 毫秒` };
+  if (maxDelaySec > MAX_DELAY_CEIL_SEC) {
+    return { error: `最大延迟不应超过 ${MAX_DELAY_CEIL_SEC} 秒` };
   }
 
   // Switch 旁显式放的 hidden input，值为 "true" / "false"
@@ -92,8 +108,10 @@ export async function saveSyncSettingsAction(
   setSetting("sync.enabled", enabled);
   setSetting("sync.windowStart", windowStart);
   setSetting("sync.windowEnd", windowEnd);
-  setSetting("sync.minDelayMs", minDelayMs);
-  setSetting("sync.maxDelayMs", maxDelayMs);
+  setSetting("sync.windowJitterMin", jitterMin);
+  setSetting("sync.windowJitterMax", jitterMax);
+  setSetting("sync.minDelaySec", minDelaySec);
+  setSetting("sync.maxDelaySec", maxDelaySec);
   setSetting("tmdb.apiKey", tmdbApiKey);
 
   revalidatePath("/settings");
