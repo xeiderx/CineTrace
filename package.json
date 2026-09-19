@@ -1,11 +1,12 @@
 {
   "name": "cinetrace",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "影视记录与媒体管理平台",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "next dev",
+    "predev": "npm run db:migrate && npm run db:seed",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
