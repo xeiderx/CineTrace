@@ -235,7 +235,9 @@ export function SyncSettings({
               className="h-8 max-w-40"
             />
             <p className="text-xs text-muted-foreground">
-              每次请求前的随机等待区间，固定节奏最容易触发风控。
+              每次请求前的随机等待区间，固定节奏最容易触发风控。建议 3 - 8
+              秒；上限调得过大（例如接近 120 秒）会让一轮全量抓取远超任务锁的 1
+              小时，锁中途过期后可能被另一轮抓取同时进入。
             </p>
           </div>
         </div>
