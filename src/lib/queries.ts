@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, like, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, like, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   platform,
@@ -11,6 +11,7 @@ import {
   type ViewRecord,
   type Work,
 } from "@/db/schema";
+import { UNBOUND_MATCH } from "@/lib/labels";
 
 /* -------------------------------------------------------------------------- */
 /*                                  展示辅助                                    */
@@ -93,6 +94,8 @@ export type WorkFilters = {
   q?: string;
   mediaType?: string;
   status?: string;
+  /** 匹配状态；UNBOUND_MATCH 表示「没绑定 TMDB」 */
+  matchStatus?: string;
   sort?: "recent" | "rating" | "title" | "year";
 };
 
@@ -145,6 +148,14 @@ export function listWorks(filters: WorkFilters = {}): WorkListItem[] {
     );
   }
   if (filters.mediaType) conditions.push(eq(work.mediaType, filters.mediaType));
+
+  // 「未绑定 TMDB」按 tmdb_id 判空，与 match_status 无关：
+  // 手填的冷门片状态也是 manual，只有这条能把它们筛出来重新匹配
+  if (filters.matchStatus === UNBOUND_MATCH) {
+    conditions.push(isNull(work.tmdbId));
+  } else if (filters.matchStatus) {
+    conditions.push(eq(work.matchStatus, filters.matchStatus));
+  }
 
   // 状态筛选作用于「是否看过某条记录」，用子查询表达更直观
   if (filters.status) {

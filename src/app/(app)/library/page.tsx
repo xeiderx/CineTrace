@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Film, Library as LibraryIcon } from "lucide-react";
 import { LibraryFilters } from "@/components/library/library-filters";
-import { WorkFormDialog } from "@/components/library/work-form-dialog";
+import { WorkSearchCreateDialog } from "@/components/library/work-search-create-dialog";
 import {
   RatingStars,
   WorkMetaBadges,
@@ -31,12 +31,13 @@ export default async function LibraryPage({
     q: pick("q") ?? undefined,
     mediaType: pick("type") ?? undefined,
     status: pick("status") ?? undefined,
+    matchStatus: pick("match") ?? undefined,
     sort: (pick("sort") as WorkFilters["sort"]) ?? "recent",
   };
 
   const items = listWorks(filters);
   const hasAnyFilter = Boolean(
-    filters.q || filters.mediaType || filters.status,
+    filters.q || filters.mediaType || filters.status || filters.matchStatus,
   );
 
   return (
@@ -45,7 +46,7 @@ export default async function LibraryPage({
         title="档案库"
         description="所有作品与观影流水。一部作品反复观看会保留多刷记录。"
       >
-        <WorkFormDialog />
+        <WorkSearchCreateDialog />
       </PageHeader>
 
       <LibraryFilters />
@@ -60,7 +61,7 @@ export default async function LibraryPage({
               : "可以先用「手动添加」录入作品，之后接入豆瓣同步与 TMDB 匹配会自动填充。"
           }
         >
-          {hasAnyFilter ? null : <WorkFormDialog />}
+          {hasAnyFilter ? null : <WorkSearchCreateDialog />}
         </EmptyState>
       ) : (
         <>

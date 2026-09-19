@@ -12,9 +12,26 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { MEDIA_TYPE_LABELS, VIEW_STATUS_LABELS, VIEW_STATUS_ORDER } from "@/lib/labels";
+import {
+  MATCH_STATUS_LABELS,
+  MEDIA_TYPE_LABELS,
+  UNBOUND_MATCH,
+  VIEW_STATUS_LABELS,
+  VIEW_STATUS_ORDER,
+  type MatchStatus,
+} from "@/lib/labels";
 
 const ALL = "all";
+
+/** 「未绑定 TMDB」不是数据库里的状态，摆在状态项后面单独一档 */
+const MATCH_STATUS_ORDER: (MatchStatus | typeof UNBOUND_MATCH)[] = [
+  ...(Object.keys(MATCH_STATUS_LABELS) as MatchStatus[]),
+  UNBOUND_MATCH,
+];
+
+function matchStatusLabel(value: MatchStatus | typeof UNBOUND_MATCH): string {
+  return value === UNBOUND_MATCH ? "未绑定 TMDB" : MATCH_STATUS_LABELS[value];
+}
 
 /** 档案库筛选栏：搜索词与下拉条件全部体现在 URL 上，便于分享与刷新保持 */
 export function LibraryFilters() {
@@ -25,6 +42,7 @@ export function LibraryFilters() {
   const q = searchParams.get("q") ?? "";
   const mediaType = searchParams.get("type") ?? ALL;
   const status = searchParams.get("status") ?? ALL;
+  const matchStatus = searchParams.get("match") ?? ALL;
   const sort = searchParams.get("sort") ?? "recent";
 
   const [draft, setDraft] = useState(q);
@@ -48,7 +66,11 @@ export function LibraryFilters() {
   }
 
   const hasFilter =
-    q !== "" || mediaType !== ALL || status !== ALL || sort !== "recent";
+    q !== "" ||
+    mediaType !== ALL ||
+    status !== ALL ||
+    matchStatus !== ALL ||
+    sort !== "recent";
 
   return (
     <div className="mb-6 flex flex-wrap items-center gap-2">
@@ -105,6 +127,20 @@ export function LibraryFilters() {
           {VIEW_STATUS_ORDER.map((value) => (
             <SelectItem key={value} value={value}>
               {VIEW_STATUS_LABELS[value]}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+
+      <Select value={matchStatus} onValueChange={(v) => apply({ match: v })}>
+        <SelectTrigger className="h-9 w-32" aria-label="匹配状态筛选">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={ALL}>全部匹配</SelectItem>
+          {MATCH_STATUS_ORDER.map((value) => (
+            <SelectItem key={value} value={value}>
+              {matchStatusLabel(value)}
             </SelectItem>
           ))}
         </SelectContent>

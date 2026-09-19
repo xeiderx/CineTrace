@@ -51,10 +51,31 @@ function joinCast(value: string | null | undefined): string {
 /**
  * 作品录入 / 编辑表单。手动新建用于豆瓣没有、或自动匹配失败的条目；
  * 编辑用于修正匹配错误后替换成正确的元数据。
+ *
+ * 默认自带触发按钮；传入 open / onOpenChange 可改为受控，
+ * 供搜索式新建弹窗的「TMDB 也搜不到」兜底入口复用。
  */
-export function WorkFormDialog({ work }: { work?: Work }) {
+export function WorkFormDialog({
+  work,
+  open: controlledOpen,
+  onOpenChange,
+  showTrigger = true,
+}: {
+  work?: Work;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  showTrigger?: boolean;
+}) {
   const isEdit = Boolean(work);
-  const [open, setOpen] = useState(false);
+  const [innerOpen, setInnerOpen] = useState(false);
+  const controlled = controlledOpen !== undefined;
+  const open = controlled ? controlledOpen : innerOpen;
+
+  function setOpen(next: boolean) {
+    if (!controlled) setInnerOpen(next);
+    onOpenChange?.(next);
+  }
+
   const [state, formAction, pending] = useActionState<FormState, FormData>(
     isEdit ? updateWorkAction : createWorkAction,
     undefined,
@@ -70,19 +91,21 @@ export function WorkFormDialog({ work }: { work?: Work }) {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        {isEdit ? (
-          <Button variant="outline" size="sm">
-            <Pencil />
-            编辑信息
-          </Button>
-        ) : (
-          <Button size="sm">
-            <Plus />
-            手动添加
-          </Button>
-        )}
-      </DialogTrigger>
+      {showTrigger ? (
+        <DialogTrigger asChild>
+          {isEdit ? (
+            <Button variant="outline" size="sm">
+              <Pencil />
+              编辑信息
+            </Button>
+          ) : (
+            <Button size="sm">
+              <Plus />
+              手动添加
+            </Button>
+          )}
+        </DialogTrigger>
+      ) : null}
 
       <DialogContent className="max-h-[88svh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>

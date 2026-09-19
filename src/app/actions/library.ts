@@ -8,7 +8,13 @@ import { db } from "@/db";
 import { person, platform, tag, viewRecord, work, workTag, type Person } from "@/db/schema";
 import { getDefaultPlatform, listWorksByCastId, posterUrl } from "@/lib/queries";
 import { mergeCast, parseCast } from "@/lib/labels";
-import { hasTmdbKey, searchTmdb, tmdbDetail, tmdbPerson } from "@/lib/tmdb";
+import {
+  hasTmdbKey,
+  searchTmdb,
+  tmdbDetail,
+  tmdbPerson,
+  type TmdbDetail,
+} from "@/lib/tmdb";
 
 export type FormState = { error?: string; ok?: boolean } | undefined;
 
@@ -199,6 +205,92 @@ export async function searchTmdbAction(
 
 export type MatchState = { ok?: boolean; message?: string; error?: string };
 
+/** 新建成功时带回 id，客户端据此跳到新作品的详情页 */
+export type CreateWorkState = MatchState & { workId?: number };
+
+/**
+ * 把 TMDB 详情整理成可写入 work 的字段。
+ *
+ * 「重新匹配已存在的作品」与「搜索后新建作品」两条路径的落库内容完全一致，
+ * 差别只在写的是 update 还是 insert，所以字段映射放这里共用，避免两处走偏。
+ */
+function tmdbValues(
+  mediaType: "movie" | "tv",
+  tmdbId: number,
+  detail: TmdbDetail,
+): Omit<Partial<typeof work.$inferInsert>, "mediaType"> & { mediaType: "movie" | "tv" } {
+  const isTv = mediaType === "tv";
+  // 剧集年份取第一季首播年，与同步任务保持一致
+  const firstSeasonYear = detail.seasons[0]?.airDate
+    ? Number(detail.seasons[0].airDate.slice(0, 4)) || null
+    : null;
+
+  return {
+    mediaType,
+    tmdbId,
+    originalTitle: detail.originalTitle,
+    posterPath: detail.posterPath,
+    overview: detail.overview,
+    runtime: detail.runtime,
+    seasonCount: isTv ? detail.seasonCount ?? (detail.seasons.length || null) : null,
+    episodeCount: isTv ? detail.episodeCount ?? null : null,
+    seasonsJson: JSON.stringify(isTv ? detail.seasons : []),
+    releaseDate: detail.releaseDate,
+    imdbId: detail.imdbId,
+    genres: JSON.stringify(detail.genres),
+    countries: JSON.stringify(detail.countries),
+    directors: JSON.stringify(detail.directors),
+    cast: JSON.stringify(detail.cast),
+    ...(isTv && firstSeasonYear != null ? { year: firstSeasonYear } : {}),
+    // 人工选择的条目不再参与后续自动匹配
+    matchStatus: "manual",
+    matchStrategy: "manual",
+    metadataSyncedAt: new Date(),
+  };
+}
+
+/**
+ * 手动搜 TMDB 后新建作品。
+ *
+ * 与「手动添加」表单的区别：这里只挑一个候选条目，
+ * 海报、简介、时长、分季、国家、主演全部由详情接口一次性带回，
+ * 不必逐项填表。冷门片 TMDB 也没有时，仍可用原表单兜底录入。
+ */
+export async function createWorkFromTmdbAction(
+  formData: FormData,
+): Promise<CreateWorkState> {
+  const tmdbId = int(formData, "tmdbId");
+  const mediaType = required(formData, "mediaType");
+  if (tmdbId == null) return { error: "缺少 TMDB ID" };
+  if (mediaType !== "movie" && mediaType !== "tv") return { error: "类型只能是电影或剧集" };
+
+  // 唯一索引 (mediaType, tmdbId)：同一 TMDB 条目不能挂到两部作品上
+  const occupied = db
+    .select({ id: work.id, title: work.title })
+    .from(work)
+    .where(and(eq(work.mediaType, mediaType), eq(work.tmdbId, tmdbId)))
+    .get();
+  if (occupied) {
+    return { error: `库里已有「${occupied.title}」，直接打开它就行` };
+  }
+
+  const detail = await tmdbDetail(mediaType, tmdbId);
+  if (!detail) return { error: "拉取 TMDB 详情失败，请确认 ID 是否正确" };
+
+  const values = tmdbValues(mediaType, tmdbId, detail);
+  // 详情接口没有本地化标题，用搜索候选带过来的片名；极端情况下才退回 TMDB ID
+  const title = text(formData, "title") ?? detail.originalTitle ?? `TMDB ${tmdbId}`;
+
+  const inserted = db
+    .insert(work)
+    .values({ ...values, title })
+    .returning({ id: work.id })
+    .get();
+
+  refreshLibrary(inserted.id);
+  return { ok: true, workId: inserted.id, message: `已添加《${title}》` };
+}
+
 /**
  * 把作品重新绑定到指定的 TMDB 条目，并用详情接口一次性回填
  * 海报、简介、时长、分季结构等字段（手动匹配后无需再逐项填表）。
@@ -228,35 +320,8 @@ export async function matchWorkToTmdbAction(
   const detail = await tmdbDetail(mediaType, tmdbId);
   if (!detail) return { error: "拉取 TMDB 详情失败，请确认 ID 是否正确" };
 
-  const isTv = mediaType === "tv";
-  // 剧集年份取第一季首播年，与同步任务保持一致
-  const firstSeasonYear = detail.seasons[0]?.airDate
-    ? Number(detail.seasons[0].airDate.slice(0, 4)) || null
-    : null;
-
   db.update(work)
-    .set({
-      mediaType,
-      tmdbId,
-      originalTitle: detail.originalTitle,
-      posterPath: detail.posterPath,
-      overview: detail.overview,
-      runtime: detail.runtime,
-      seasonCount: isTv ? detail.seasonCount ?? (detail.seasons.length || null) : null,
-      episodeCount: isTv ? detail.episodeCount ?? null : null,
-      seasonsJson: JSON.stringify(isTv ? detail.seasons : []),
-      releaseDate: detail.releaseDate,
-      imdbId: detail.imdbId,
-      genres: JSON.stringify(detail.genres),
-      countries: JSON.stringify(detail.countries),
-      directors: JSON.stringify(detail.directors),
-      cast: JSON.stringify(detail.cast),
-      ...(isTv && firstSeasonYear != null ? { year: firstSeasonYear } : {}),
-      // 人工确认的结果不参与后续自动匹配
-      matchStatus: "manual",
-      matchStrategy: "manual",
-      metadataSyncedAt: new Date(),
-    })
+    .set(tmdbValues(mediaType, tmdbId, detail))
     .where(eq(work.id, id))
     .run();
 

@@ -33,6 +33,15 @@ export const MATCH_STATUS_LABELS: Record<MatchStatus, string> = {
   failed: "匹配失败",
 };
 
+/**
+ * 档案库筛选里的额外一项：没绑定 TMDB 的作品。
+ *
+ * 它不是 work.match_status 的取值——手填的冷门片状态同样是 manual，
+ * 与「重新匹配」绑成功的混在一起，这里用 tmdb_id 判空把它们单独拎出来，
+ * 方便 TMDB 日后收录了再回来重新匹配。
+ */
+export const UNBOUND_MATCH = "unbound";
+
 export const VIEW_STATUS_ORDER: ViewStatus[] = [
   "watched",
   "watching",
