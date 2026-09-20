@@ -13,8 +13,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  MATCH_STATUS_LABELS,
-  MATCH_STATUS_ORDER,
+  MATCH_FILTER_OPTIONS,
   MEDIA_TYPE_LABELS,
   VIEW_STATUS_LABELS,
   VIEW_STATUS_ORDER,
@@ -149,9 +148,9 @@ export function LibraryFilters({
         </SelectTrigger>
         <SelectContent>
           <SelectItem value={ALL}>全部匹配</SelectItem>
-          {MATCH_STATUS_ORDER.map((value) => (
-            <SelectItem key={value} value={value}>
-              {MATCH_STATUS_LABELS[value]}
+          {MATCH_FILTER_OPTIONS.map((item) => (
+            <SelectItem key={item.value} value={item.value}>
+              {item.label}
             </SelectItem>
           ))}
         </SelectContent>

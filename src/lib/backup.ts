@@ -423,7 +423,7 @@ export function importBackup(file: BackupFile): ImportStats {
         title: row.title,
         originalTitle: row.originalTitle ?? null,
         year: row.year ?? null,
-        matchStatus: row.matchStatus ?? "pending",
+        matchStatus: row.matchStatus ?? "failed",
         matchStrategy: row.matchStrategy ?? null,
         matchScore: row.matchScore ?? null,
       };
@@ -524,7 +524,7 @@ export function importBackup(file: BackupFile): ImportStats {
  * 而国家当年是从豆瓣列表页的 item.country 写进去的，存量数据里非空，
  * 拿它当判据会一条都判不出来。
  */
-const pendingMetadataWhere = and(
+export const pendingMetadataWhere = and(
   isNotNull(work.tmdbId),
   or(isNull(work.metadataSyncedAt), eq(work.cast, "[]")),
 );

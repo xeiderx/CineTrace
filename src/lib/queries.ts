@@ -12,6 +12,8 @@ import {
   type ViewRecord,
   type Work,
 } from "@/db/schema";
+import { pendingMetadataWhere } from "@/lib/backup";
+import { PENDING_METADATA_FILTER } from "@/lib/labels";
 
 /* -------------------------------------------------------------------------- */
 /*                                  展示辅助                                    */
@@ -194,7 +196,8 @@ export function listWorks(filters: WorkFilters = {}): WorkListItem[] {
   if (filters.mediaType) conditions.push(eq(work.mediaType, filters.mediaType));
 
   // 匹配状态分档与库里存的值不完全一一对应：
-  // 「已匹配」把手动绑定但拿到了 TMDB 数据的也收进来，「自由添加」只留没有 TMDB 数据的手工条目
+  // 「已匹配」把手动绑定但拿到了 TMDB 数据的也收进来，「自由添加」只留没有 TMDB 数据的手工条目；
+  // 「待补全」是派生条件（有 tmdbId 但元数据没拉全），不是 match_status 的取值
   if (filters.matchStatus === "matched") {
     conditions.push(
       or(
@@ -204,6 +207,8 @@ export function listWorks(filters: WorkFilters = {}): WorkListItem[] {
     );
   } else if (filters.matchStatus === "manual") {
     conditions.push(and(eq(work.matchStatus, "manual"), isNull(work.tmdbId)));
+  } else if (filters.matchStatus === PENDING_METADATA_FILTER) {
+    conditions.push(pendingMetadataWhere);
   } else if (filters.matchStatus) {
     conditions.push(eq(work.matchStatus, filters.matchStatus));
   }

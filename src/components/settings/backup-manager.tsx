@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Download, RefreshCw, Upload } from "lucide-react";
 import {
@@ -13,6 +14,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { PENDING_METADATA_FILTER } from "@/lib/labels";
 
 type Props = {
   /** 待补 TMDB 元数据的作品数，服务端渲染时算好 */
@@ -166,8 +168,15 @@ export function BackupManager({ pendingMetadata }: Props) {
             <Label>补全 TMDB 元数据</Label>
             <p className="text-xs text-muted-foreground">
               为导入后尚未同步过详情的作品拉取海报、简介、时长与分季结构。
-              当前待补 <span className="font-medium text-foreground">{pendingMetadata}</span> 部，
-              点一次会自动补到完，期间可以随意切换页面。
+              当前待补{" "}
+              <Link
+                href={`/library?match=${PENDING_METADATA_FILTER}`}
+                className="font-medium text-foreground underline underline-offset-2 hover:text-primary"
+              >
+                {pendingMetadata} 部
+              </Link>
+              ，点一次会自动补到完，期间可以随意切换页面。
+              个别作品 TMDB 上没有演员数据，会一直留在待补列表里。
             </p>
           </div>
           <Button
@@ -181,7 +190,7 @@ export function BackupManager({ pendingMetadata }: Props) {
             {starting
               ? "启动中…"
               : running
-                ? `补全中 ${backfillState?.done ?? 0}/${backfillState?.total ?? 0}…`
+                ? `补全中，剩 ${backfillState?.pending ?? pendingMetadata} 部…`
                 : "开始补全"}
           </Button>
         </div>

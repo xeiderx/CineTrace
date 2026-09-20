@@ -122,7 +122,7 @@ export const work = sqliteTable(
     cast: text("cast").default("[]").notNull(),
 
     /* ---- 匹配状态：支撑「手动换绑 / 手动新建」---- */
-    /** 'matched' 自动匹配成功 | 'manual' 手动指定 | 'pending' 待匹配 | 'failed' 匹配失败 */
+    /** 'matched' 自动匹配成功 | 'manual' 手动指定 | 'failed' 待匹配（未匹配上 TMDB） */
     matchStatus: text("match_status").notNull().default("pending"),
     /** 匹配依据：'A' 中文名 | 'B' 原名 | 'C' 剧集兜底 | 'manual' */
     matchStrategy: text("match_strategy"),

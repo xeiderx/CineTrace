@@ -2,7 +2,7 @@
 
 export type MediaType = "movie" | "tv";
 export type ViewStatus = "watched" | "watching" | "wish" | "on_hold" | "dropped";
-export type MatchStatus = "matched" | "manual" | "pending" | "failed";
+export type MatchStatus = "matched" | "manual" | "failed";
 
 export const MEDIA_TYPE_LABELS: Record<MediaType, string> = {
   movie: "电影",
@@ -29,19 +29,25 @@ export const VIEW_STATUS_TONES: Record<ViewStatus, string> = {
 export const MATCH_STATUS_LABELS: Record<MatchStatus, string> = {
   matched: "已匹配",
   manual: "自由添加",
-  pending: "待匹配",
-  failed: "匹配失败",
+  failed: "待匹配",
 };
 
 /**
- * 库内展示用的匹配状态顺序：已匹配 → 待匹配 → 匹配失败 → 自由添加。
- * 「自由添加」是无 TMDB 数据的手工条目，排在最后。
+ * 「待补全」不是 work.match_status 的取值，而是「有 tmdbId 但元数据没拉全」
+ * 的派生筛选（见 lib/backup.ts 的 pendingMetadataWhere），
+ * 因此单独作为一个筛选项值，与匹配状态并列在下拉里。
  */
-export const MATCH_STATUS_ORDER: MatchStatus[] = [
-  "matched",
-  "pending",
-  "failed",
-  "manual",
+export const PENDING_METADATA_FILTER = "pending_metadata";
+
+/**
+ * 档案库「匹配状态」下拉的选项：已匹配 → 待补全 → 待匹配 → 自由添加。
+ * 「待补全」是派生条件，「自由添加」是无 TMDB 数据的手工条目，也排在最后。
+ */
+export const MATCH_FILTER_OPTIONS: { value: string; label: string }[] = [
+  { value: "matched", label: MATCH_STATUS_LABELS.matched },
+  { value: PENDING_METADATA_FILTER, label: "待补全" },
+  { value: "failed", label: MATCH_STATUS_LABELS.failed },
+  { value: "manual", label: MATCH_STATUS_LABELS.manual },
 ];
 
 /**

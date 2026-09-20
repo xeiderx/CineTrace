@@ -85,7 +85,7 @@ export type BackfillState = {
   running: boolean;
   /** 本次补全启动时的待补总数 */
   total: number;
-  /** 本次已成功写入元数据的数量 */
+  /** 本次已补上主演信息、不再待补的数量 */
   done: number;
   /** 当前仍待补的数量（实时统计，含拉取失败的） */
   pending: number;
@@ -114,10 +114,10 @@ function backfillSnapshot(): BackfillState {
     message: backfill.running
       ? undefined
       : backfill.done === 0
-        ? "这次没拉到任何元数据，稍后可以再点一次。"
+        ? "剩下的作品 TMDB 上都没有演员数据，补不了；海报、简介等已是最新。"
         : pending === 0
           ? `补全完成：本次补全 ${backfill.done} 部。`
-          : `本次补全 ${backfill.done} 部，仍有 ${pending} 部没拉到（TMDB 上没有对应条目或网络异常），可稍后再点一次。`,
+          : `本次补全 ${backfill.done} 部。还有 ${pending} 部在 TMDB 上没有演员数据，拉不到，可到档案库按「待补全」查看。`,
   };
 }
 
@@ -165,24 +165,31 @@ export async function getBackfillProgressAction(): Promise<BackfillState> {
   return backfillSnapshot();
 }
 
-/** 一批接一批补到没有进展为止，全程只更新内存里的进度对象。 */
+/**
+ * 一批接一批补到没有进展为止，全程只更新内存里的进度对象。
+ *
+ * 进展的判据是「待补数量有没有下降」，不是「TMDB 请求有没有成功」——
+ * 有些条目（尤其纪录片、冷门片）TMDB 上就是没有演员数据，`cast` 会一直是空，
+ * 于是它们每次都会被重新取到、每次「请求成功」，待补数量却一动不动。
+ * 只看请求成功与否会让循环空转到轮次上限，进度条还会涨到超过总数。
+ */
 async function runBackfill(progress: BackfillProgress): Promise<void> {
   try {
+    let lastPending = countPendingMetadata();
+
     for (let round = 0; round < BACKFILL_MAX_ROUNDS; round += 1) {
       const batch = listPendingMetadata(BACKFILL_BATCH);
       if (batch.length === 0) break;
 
-      let succeeded = 0;
       for (const row of batch) {
-        if (await fillOne(row)) {
-          progress.done += 1;
-          succeeded += 1;
-        }
+        if (await fillOne(row)) progress.done += 1;
         await sleep(BACKFILL_GAP_MS);
       }
 
-      // 一整批下来一部都没成功，说明剩下的都拉不到，再跑也是白跑
-      if (succeeded === 0) break;
+      const pending = countPendingMetadata();
+      // 一轮下来待补数量没减少，说明剩下的都是 TMDB 侧拉不到数据的，再跑也是白跑
+      if (pending >= lastPending) break;
+      lastPending = pending;
     }
   } catch (error) {
     console.error("[backfill] 补全中断", error);
@@ -191,7 +198,13 @@ async function runBackfill(progress: BackfillProgress): Promise<void> {
   }
 }
 
-/** 拉取并写入单部作品的 TMDB 元数据；失败返回 false，留在待补队列里。 */
+/**
+ * 拉取并写入单部作品的 TMDB 元数据。
+ *
+ * 返回值表示「这部作品是否已经不再待补」，而不是「请求是否成功」——
+ * 待补的判据是有 tmdbId 且主演为空，而有些作品 TMDB 上就是没有演员数据，
+ * 写完之后依旧待补。把它们算作成功会让进度条超出总数、也掩盖真实进展。
+ */
 async function fillOne(row: {
   id: number;
   mediaType: string;
@@ -226,5 +239,6 @@ async function fillOne(row: {
     .where(eq(work.id, row.id))
     .run();
 
-  return true;
+  // 写入后是否还留在待补队列里，取决于主演有没有拿到（见 lib/backup.ts 的判定）
+  return detail.cast.length > 0;
 }
