@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { person, platform, tag, viewRecord, work, workTag, type Person } from "@/db/schema";
+import { collectionItem, person, platform, tag, viewRecord, work, workTag, type Person } from "@/db/schema";
 import { getDefaultPlatform, listWorksByCastId, posterUrl } from "@/lib/queries";
 import { mergeCast, parseCast } from "@/lib/labels";
 import {
@@ -203,7 +203,18 @@ export async function searchTmdbAction(
   };
 }
 
-export type MatchState = { ok?: boolean; message?: string; error?: string };
+export type MatchState = {
+  ok?: boolean;
+  message?: string;
+  error?: string;
+  /**
+   * 目标 TMDB 条目已被别的作品占用（同一部剧在库里占了两行）。
+   * 回带占用方信息，前端据此提供「合并」确认，而不是让用户干瞪眼。
+   */
+  conflict?: { workId: number; title: string };
+  /** 合并完成后的存留作品：当前详情页已被删掉，客户端要跳到它 */
+  merged?: { workId: number; title: string };
+};
 
 /** 新建成功时带回 id，客户端据此跳到新作品的详情页 */
 export type CreateWorkState = MatchState & { workId?: number };
@@ -292,8 +303,60 @@ export async function createWorkFromTmdbAction(
 }
 
 /**
+ * 把重复的作品行并进已有的那一行，然后删掉它。
+ *
+ * 多季剧在库里占两行时（豆瓣每季一个条目，各季各自匹配就可能留下重复），
+ * 重新绑定时会撞上 (mediaType, tmdbId) 唯一索引，此时该做的是合并不是报错。
+ * 观影记录是 `onDelete: set null`，不显式改挂就会变成「未关联作品」；
+ * 标签与片单是 `onDelete: cascade`，得先复制过去再删，否则跟着重复行一起没了。
+ */
+function mergeWorkInto(sourceId: number, target: { id: number; title: string }): MatchState {
+  db.transaction((tx) => {
+    tx.update(viewRecord).set({ workId: target.id }).where(eq(viewRecord.workId, sourceId)).run();
+
+    const tags = tx
+      .select({ tagId: workTag.tagId })
+      .from(workTag)
+      .where(eq(workTag.workId, sourceId))
+      .all();
+    for (const { tagId } of tags) {
+      tx.insert(workTag).values({ workId: target.id, tagId }).onConflictDoNothing().run();
+    }
+
+    const items = tx
+      .select({
+        collectionId: collectionItem.collectionId,
+        sortOrder: collectionItem.sortOrder,
+        note: collectionItem.note,
+      })
+      .from(collectionItem)
+      .where(eq(collectionItem.workId, sourceId))
+      .all();
+    for (const item of items) {
+      tx.insert(collectionItem)
+        .values({ ...item, workId: target.id })
+        .onConflictDoNothing()
+        .run();
+    }
+
+    tx.delete(work).where(eq(work.id, sourceId)).run();
+  });
+
+  // 当前详情页对应的作品已经被删了，客户端要跳到合并后的那一部
+  refreshLibrary(target.id);
+  return {
+    ok: true,
+    message: `已合并到《${target.title}》，观影记录一并转移`,
+    merged: { workId: target.id, title: target.title },
+  };
+}
+
+/**
  * 把作品重新绑定到指定的 TMDB 条目，并用详情接口一次性回填
  * 海报、简介、时长、分季结构等字段（手动匹配后无需再逐项填表）。
+ *
+ * 目标条目已被别的作品占用时（同一部剧在库里占了两行）不直接报错，
+ * 而是把占用方回带给前端，用户确认后再带 `merge=1` 调一次本接口完成合并。
  */
 export async function matchWorkToTmdbAction(
   formData: FormData,
@@ -314,7 +377,13 @@ export async function matchWorkToTmdbAction(
     .where(and(eq(work.mediaType, mediaType), eq(work.tmdbId, tmdbId)))
     .get();
   if (occupied && occupied.id !== id) {
-    return { error: `该条目已绑定到「${occupied.title}」，请先处理那一部` };
+    if (text(formData, "merge") !== "1") {
+      return {
+        error: `该条目已绑定到「${occupied.title}」，可以把这一条并过去`,
+        conflict: { workId: occupied.id, title: occupied.title },
+      };
+    }
+    return mergeWorkInto(id, occupied);
   }
 
   const detail = await tmdbDetail(mediaType, tmdbId);

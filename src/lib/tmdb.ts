@@ -748,26 +748,63 @@ function yearCheck(doubanYear: number | null, tmdbYear: number | null): boolean 
 }
 
 /**
+ * 「按季独立」的 TMDB 条目：原本属于某剧的一季，被单独建成一个剧集条目
+ * （原名形如「Fallout - Season 2」）。本地化后的名字可能是「辐射 第二季」，
+ * 所以中文名与原名都看。
+ */
+const SEASON_ENTITY_RE = /(?:\s[-–—:]\s*season\s*\d+|第\s*[一二三四五六七八九十\d]+\s*季)\s*$/i;
+
+function isSeasonEntity(result: TmdbResult): boolean {
+  return [result.title, result.originalTitle].some(
+    (name) => name != null && SEASON_ENTITY_RE.test(name.trim()),
+  );
+}
+
+/**
  * 依次尝试 A → B → C，返回第一个「年份可接受」的命中。
  * 若三层都只有年份对不上的结果，则判为 low_score 而不是 no_match，
  * 两者在设置页的排查含义不同。
  */
 export async function matchWork(input: MatchInput): Promise<MatchOutcome> {
   const attempts: MatchHit[] = [];
+  // 豆瓣条目带「第X季」标识时，按季独立的 TMDB 条目不能采信——采信会让一部剧
+  // 在库里分成两行作品（豆瓣「辐射 第二季」就这样落在了独立的「Fallout - Season 2」上）。
+  // 这类命中先搁置，让策略 C 的整剧路径先试；整剧也走不通再退回，
+  // 免得本来能匹配上的条目因为这条规则反而变成待匹配。
+  const season = parseSeasonNumber(input.titleCn);
+  let seasonEntity: MatchHit | null = null;
+  const holdsSeasonEntity = (hit: MatchHit) => {
+    if (season === null || !isSeasonEntity(hit.result)) return false;
+    seasonEntity ??= hit;
+    return true;
+  };
 
   const a = await strategyA(input);
-  if (a && a.yearOk !== false) return { ok: true, hit: a };
-  if (a) attempts.push(a);
+  if (a) {
+    if (a.yearOk !== false) {
+      if (!holdsSeasonEntity(a)) return { ok: true, hit: a };
+    } else {
+      attempts.push(a);
+    }
+  }
 
   await sleep(STRATEGY_GAP_MS);
   const b = await strategyB(input);
-  if (b && b.yearOk !== false) return { ok: true, hit: b };
-  if (b) attempts.push(b);
+  if (b) {
+    if (b.yearOk !== false) {
+      if (!holdsSeasonEntity(b)) return { ok: true, hit: b };
+    } else {
+      attempts.push(b);
+    }
+  }
 
   await sleep(STRATEGY_GAP_MS);
   const c = await strategyC(input);
   if (c) return { ok: true, hit: c };
   // C 的命中条件已含季存在校验；年份只记分不否决，走到这里说明剧集路径也没戏
+
+  // 整剧路径没结果时退回那条按季独立的命中——它至少是正确的那一季
+  if (seasonEntity) return { ok: true, hit: seasonEntity };
 
   const best = attempts.sort((x, y) => y.score - x.score)[0];
   if (best) {

@@ -1,11 +1,13 @@
 "use client";
 
 import { useActionState, useState, useTransition } from "react";
-import { Search, SearchCheck } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Combine, Search, SearchCheck } from "lucide-react";
 import { toast } from "sonner";
 import {
   matchWorkToTmdbAction,
   searchTmdbAction,
+  type MatchState,
   type SearchState,
   type TmdbCandidate,
 } from "@/app/actions/library";
@@ -47,8 +49,13 @@ export function WorkMatchDialog({
   const [pendingKey, setPendingKey] = useState<string | null>(null);
   const [matching, startMatch] = useTransition();
   const [matchError, setMatchError] = useState<string | null>(null);
+  // 目标 TMDB 条目已被别的作品占着：记下冲突方可一键合并
+  const [conflict, setConflict] = useState<
+    (MatchState["conflict"] & { candidate: TmdbCandidate }) | null
+  >(null);
+  const router = useRouter();
 
-  function choose(candidate: TmdbCandidate) {
+  function choose(candidate: TmdbCandidate, merge = false) {
     const key = `${candidate.mediaType}:${candidate.tmdbId}`;
     setMatchError(null);
     setPendingKey(key);
@@ -57,6 +64,7 @@ export function WorkMatchDialog({
     formData.set("id", String(workId));
     formData.set("tmdbId", String(candidate.tmdbId));
     formData.set("mediaType", candidate.mediaType);
+    if (merge) formData.set("merge", "1");
 
     startMatch(async () => {
       const result = await matchWorkToTmdbAction(formData);
@@ -64,10 +72,15 @@ export function WorkMatchDialog({
 
       if (result?.error) {
         setMatchError(result.error);
+        setConflict(result.conflict ? { ...result.conflict, candidate } : null);
         return;
       }
+
+      setConflict(null);
       toast.success(result?.message ?? "已重新绑定");
       setOpen(false);
+      // 作品被并进另一部后当前详情页已不存在，得跳到存留下来的那一部
+      if (result?.merged) router.push(`/library/${result.merged.workId}`);
     });
   }
 
@@ -118,12 +131,26 @@ export function WorkMatchDialog({
         ) : null}
 
         {matchError ? (
-          <p
-            role="alert"
-            className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive"
-          >
-            {matchError}
-          </p>
+          <div className="space-y-2 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            <p role="alert">{matchError}</p>
+            {conflict ? (
+              <div className="space-y-1.5">
+                <p className="text-xs text-muted-foreground">
+                  合并会把这一条的观影记录转到《{conflict.title}》，本条随后删除。
+                </p>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  disabled={busy}
+                  onClick={() => choose(conflict.candidate, true)}
+                >
+                  <Combine />
+                  {pendingKey ? "合并中…" : `合并到《${conflict.title}》`}
+                </Button>
+              </div>
+            ) : null}
+          </div>
         ) : null}
 
         {state?.candidates?.length ? (
