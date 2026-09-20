@@ -39,7 +39,7 @@ export default function OverviewPage() {
       key: "watched",
       label: "看过",
       icon: Film,
-      hint: "与豆瓣「已看」同口径，同剧多季各算一条",
+      hint: "同豆瓣「已看」，如有差额可能存在删/并/私密",
       value: String(stats.watchedRecordCount),
     },
     {
@@ -104,13 +104,13 @@ export default function OverviewPage() {
         <SyncCards initial={syncState} />
 
         {/* 差额为 0（或还没抓到豆瓣的声明数）时不显示：没有差异就没有解释的必要。
-            出现差额基本只有一个原因——豆瓣把它删除或合并掉的条目仍计入总数，
-            但列表接口不再返回，所以本地抓不到，与同步是否跑完无关。 */}
+            出现差额基本只有一个原因——豆瓣把条目删除、合并或转为私密后，它们仍计入
+            总数，但列表接口不再返回，所以本地抓不到，与同步是否跑完无关。 */}
         {watchedGap > 0 ? (
           <p className="mt-3 text-xs text-muted-foreground">
-            豆瓣「看过」声明 {declaredWatched} 条 · 本地已抓{" "}
-            {stats.watchedRecordCount} 条 · 差 {watchedGap} 条 ｜ 差额来自豆瓣已删除或
-            合并的条目，它们仍计入豆瓣总数但不再出现在列表里，无法抓取
+            豆瓣「已看」声明 {declaredWatched} 条 · 本地已抓{" "}
+            {stats.watchedRecordCount} 条 · 差 {watchedGap} 条 ｜ 差额来自豆瓣已删除、
+            合并或转为私密的条目，它们仍计入豆瓣总数但不再出现在列表里，无法抓取
           </p>
         ) : null}
       </section>
