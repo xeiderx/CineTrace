@@ -1,4 +1,17 @@
-import { and, asc, desc, eq, inArray, isNotNull, isNull, like, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  gt,
+  inArray,
+  isNotNull,
+  isNull,
+  like,
+  or,
+  sql,
+} from "drizzle-orm";
 import type { AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 import { db } from "@/db";
 import {
@@ -367,26 +380,6 @@ function sortWorks(items: WorkListItem[], sort: NonNullable<WorkFilters["sort"]>
   }
 }
 
-export function countWorks(): number {
-  const row = db.select({ value: sql<number>`count(*)` }).from(work).get();
-  return row?.value ?? 0;
-}
-
-/**
- * 「看过」的观影流水条数。
- *
- * 这是与豆瓣「已看」对得上的口径：豆瓣一季算一个独立条目，本地也一季一条记录。
- * 它比 countWorks() 大——整季归并后多季剧只占一行 work，季数差就体现在这里。
- */
-export function countWatchedRecords(): number {
-  const row = db
-    .select({ value: sql<number>`count(*)` })
-    .from(viewRecord)
-    .where(eq(viewRecord.status, "watched"))
-    .get();
-  return row?.value ?? 0;
-}
-
 /* -------------------------------------------------------------------------- */
 /*                                  作品详情                                    */
 /* -------------------------------------------------------------------------- */
@@ -507,78 +500,79 @@ export function getWorkDetail(workId: number): WorkDetail | null {
 /* -------------------------------------------------------------------------- */
 
 export type OverviewStats = {
+  /** 作品实体数：同剧多季只算 1 部 */
   workCount: number;
+  movieCount: number;
+  tvCount: number;
   /** 「看过」流水条数，与豆瓣「已看」同口径（作品数则受整季归并影响而更少） */
   watchedRecordCount: number;
-  recordCount: number;
-  totalMinutes: number;
-  averageRating: number | null;
-  ratedCount: number;
+  /** 有看过日期的天数，同一天看多部只算一天 */
+  watchDays: number;
+  /** 最早的一个看过日期（`YYYY-MM-DD`），没有则 null */
+  firstWatchedAt: string | null;
+  /** 看过日期落在今年的流水条数 */
+  thisYearCount: number;
+  /** 去年全年的流水条数，仅用于给「今年」一个参照 */
+  lastYearCount: number;
+  /** 看过 2 次及以上的作品数，按作品去重 */
+  rewatchWorkCount: number;
 };
 
 export function getOverviewStats(): OverviewStats {
-  const workCount = countWorks();
-  const watchedRecordCount = countWatchedRecords();
-
-  // 「有看过日期就算数」：状态后来被豆瓣改回「想看」的记录，那天确实看过的历史仍然成立，
-  // 不能因为状态变了就把这一笔从记录数和累计时长里抹掉。
-  const rows = db
-    .select({
-      rating: viewRecord.rating,
-      progressSeason: viewRecord.progressSeason,
-      episodesWatched: viewRecord.episodesWatched,
-      runtime: work.runtime,
-      mediaType: work.mediaType,
-      seasonsJson: work.seasonsJson,
-    })
-    .from(viewRecord)
-    .leftJoin(work, eq(work.id, viewRecord.workId))
-    .where(or(eq(viewRecord.status, "watched"), isNotNull(viewRecord.watchedAt)))
+  const mediaCounts = db
+    .select({ mediaType: work.mediaType, n: count() })
+    .from(work)
+    .groupBy(work.mediaType)
     .all();
 
-  let totalMinutes = 0;
-  let ratingSum = 0;
-  let ratedCount = 0;
-
-  for (const row of rows) {
-    if (row.runtime && row.runtime > 0) {
-      totalMinutes += row.runtime * episodeUnits(row);
-    }
-    if (row.rating != null) {
-      ratingSum += row.rating;
-      ratedCount += 1;
-    }
+  let movieCount = 0;
+  let tvCount = 0;
+  for (const row of mediaCounts) {
+    if (row.mediaType === "tv") tvCount += row.n;
+    else movieCount += row.n;
   }
+
+  // 豆瓣「已看」口径：只要状态是看过就算一条，与是否填了日期无关。
+  const watchedRecordCount =
+    db
+      .select({ n: count() })
+      .from(viewRecord)
+      .where(eq(viewRecord.status, "watched"))
+      .get()?.n ?? 0;
+
+  // 「有看过日期就算数」：状态后来被豆瓣改回「想看」的记录，那天确实看过的历史仍然成立，
+  // 不能因为状态变了就把这一笔从天数与年度统计里抹掉。
+  const year = String(new Date().getFullYear());
+  const lastYear = String(new Date().getFullYear() - 1);
+  const dateStats = db
+    .select({
+      watchDays: sql<number>`count(distinct ${viewRecord.watchedAt})`,
+      firstWatchedAt: sql<string | null>`min(${viewRecord.watchedAt})`,
+      thisYearCount: sql<number>`coalesce(sum(substr(${viewRecord.watchedAt}, 1, 4) = ${year}), 0)`,
+      lastYearCount: sql<number>`coalesce(sum(substr(${viewRecord.watchedAt}, 1, 4) = ${lastYear}), 0)`,
+    })
+    .from(viewRecord)
+    .where(isNotNull(viewRecord.watchedAt))
+    .get();
+
+  const rewatchWorkCount =
+    db
+      .select({ n: sql<number>`count(distinct ${viewRecord.workId})` })
+      .from(viewRecord)
+      .where(gt(viewRecord.watchIndex, 1))
+      .get()?.n ?? 0;
 
   return {
-    workCount,
+    workCount: movieCount + tvCount,
+    movieCount,
+    tvCount,
     watchedRecordCount,
-    recordCount: rows.length,
-    totalMinutes,
-    averageRating: ratedCount > 0 ? ratingSum / ratedCount : null,
-    ratedCount,
+    watchDays: dateStats?.watchDays ?? 0,
+    firstWatchedAt: dateStats?.firstWatchedAt ?? null,
+    thisYearCount: dateStats?.thisYearCount ?? 0,
+    lastYearCount: dateStats?.lastYearCount ?? 0,
+    rewatchWorkCount,
   };
-}
-
-/**
- * 一条记录折算成多少「集」。电影恒为 1；
- * 剧集优先用显式填写的已看集数，其次用该季的总集数，都没有才算 1。
- */
-function episodeUnits(row: {
-  mediaType: string | null;
-  progressSeason: number | null;
-  episodesWatched: number | null;
-  seasonsJson: string | null;
-}): number {
-  if (row.mediaType !== "tv") return 1;
-  if (row.episodesWatched && row.episodesWatched > 0) return row.episodesWatched;
-  if (row.progressSeason != null) {
-    const season = parseSeasons(row.seasonsJson).find(
-      (s) => s.seasonNumber === row.progressSeason,
-    );
-    if (season && season.episodeCount > 0) return season.episodeCount;
-  }
-  return 1;
 }
 
 export type RecentWatch = {

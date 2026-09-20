@@ -1,17 +1,13 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { Clock, Film, Layers, Star } from "lucide-react";
+import { CalendarDays, Clapperboard, Film, Layers, Repeat } from "lucide-react";
 import { EmptyState } from "@/components/layout/empty-state";
 import { PageHeader } from "@/components/layout/page-header";
 import { SyncCards } from "@/components/overview/sync-cards";
 import { WorkPoster } from "@/components/library/work-card";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import {
-  formatMinutes,
-  viewStatusLabel,
-  viewStatusTone,
-} from "@/lib/labels";
+import { viewStatusLabel, viewStatusTone } from "@/lib/labels";
 import { getOverviewStats, listRecentWatches } from "@/lib/queries";
 import { getSetting } from "@/lib/settings";
 import { getSyncCardsState } from "@/lib/sync-status-server";
@@ -28,35 +24,44 @@ export default function OverviewPage() {
   const declaredWatched = getSetting("douban.lastWatchedTotal");
   const watchedGap = declaredWatched - stats.watchedRecordCount;
 
+  // 「2018-11-04」→「2018-11」，只到月份就够说明跨度了
+  const since = stats.firstWatchedAt ? stats.firstWatchedAt.slice(0, 7) : null;
+
   const cards = [
     {
       key: "works",
       label: "作品总数",
       icon: Layers,
-      hint: "同剧多季只算 1 部，故少于豆瓣条目数",
+      hint: `电影 ${stats.movieCount} · 剧集 ${stats.tvCount}`,
       value: String(stats.workCount),
     },
     {
-      key: "records",
-      label: "观影记录",
+      key: "watched",
+      label: "看过",
       icon: Film,
-      hint: `全部流水；其中「看过」状态 ${stats.watchedRecordCount} 条`,
-      value: String(stats.recordCount),
+      hint: "与豆瓣「已看」同口径，同剧多季各算一条",
+      value: String(stats.watchedRecordCount),
     },
     {
-      key: "minutes",
-      label: "累计时长",
-      icon: Clock,
-      hint: "按片长估算，剧集按已看集数",
-      value: formatMinutes(stats.totalMinutes),
+      key: "rewatch",
+      label: "N刷",
+      icon: Repeat,
+      hint: "看过 2 遍及以上的作品，按作品去重",
+      value: String(stats.rewatchWorkCount),
     },
     {
-      key: "rating",
-      label: "平均评分",
-      icon: Star,
-      hint: `基于 ${stats.ratedCount} 次打分`,
-      value:
-        stats.averageRating != null ? stats.averageRating.toFixed(1) : "—",
+      key: "days",
+      label: "观影天数",
+      icon: CalendarDays,
+      hint: since ? `${since} 至今，同一天看多部只算一天` : "有看过日期的天数",
+      value: String(stats.watchDays),
+    },
+    {
+      key: "this-year",
+      label: "今年看过",
+      icon: Clapperboard,
+      hint: `去年全年 ${stats.lastYearCount} 条`,
+      value: String(stats.thisYearCount),
     },
   ];
 
@@ -67,7 +72,7 @@ export default function OverviewPage() {
         description="你的观影轨迹一览。"
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
         {cards.map((card) => {
           const Icon = card.icon;
           return (
