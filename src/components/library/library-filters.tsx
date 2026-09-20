@@ -24,6 +24,12 @@ import type { FacetItem } from "@/lib/queries";
 
 const ALL = "all";
 
+/** 国家下拉默认只列作品最多的前几个，其余收进「更多」——几十个选项一次铺开光滚动就够碍事 */
+const COUNTRY_TOP_COUNT = 10;
+
+/** 「更多国家」的哨兵值。它不是真的筛选项，任何情况下都不该落到 URL 上 */
+const SHOW_MORE_COUNTRIES = "__more_countries__";
+
 /** 下拉里带数量的选项文案，如「恐怖 (23)」 */
 function facetLabel(item: FacetItem): string {
   return `${item.value} (${item.count})`;
@@ -55,6 +61,7 @@ export function LibraryFilters({
 
   const [draft, setDraft] = useState(q);
   const [syncedQuery, setSyncedQuery] = useState(q);
+  const [showAllCountries, setShowAllCountries] = useState(false);
 
   // 外部（如浏览器前进后退）改变 URL 时同步输入框。
   // 用渲染期比对代替 effect，避免级联渲染。
@@ -85,6 +92,17 @@ export function LibraryFilters({
     country !== ALL ||
     genre !== ALL ||
     sort !== "recent";
+
+  // 国家下拉平时只挂前 COUNTRY_TOP_COUNT 个，其余点「更多国家」再铺开。
+  // 若当前选中的国家不在这批里，得把它插进来，否则触发器找不到对应文案会显示成空白
+  const topCountries = countries.slice(0, COUNTRY_TOP_COUNT);
+  const selectedCountry = countries.find((item) => item.value === country);
+  const visibleCountries = showAllCountries
+    ? countries
+    : selectedCountry && !topCountries.includes(selectedCountry)
+      ? [...topCountries, selectedCountry]
+      : topCountries;
+  const hasMoreCountries = countries.length > COUNTRY_TOP_COUNT;
 
   return (
     <div className="mb-6 flex flex-wrap items-center gap-2">
@@ -186,17 +204,50 @@ export function LibraryFilters({
         </SelectContent>
       </Select>
 
-      <Select value={country} onValueChange={(v) => apply({ country: v })}>
+      <Select
+        value={country}
+        onValueChange={(v) => apply({ country: v })}
+        // 关掉下拉就把展开状态收回，下次打开还是精简列表
+        onOpenChange={(open) => {
+          if (!open) setShowAllCountries(false);
+        }}
+      >
         <SelectTrigger className="h-9 w-32" aria-label="国家筛选">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
           <SelectItem value={ALL}>全部国家</SelectItem>
-          {countries.map((item) => (
+          {visibleCountries.map((item) => (
             <SelectItem key={item.value} value={item.value}>
               {facetLabel(item)}
             </SelectItem>
           ))}
+          {hasMoreCountries && !showAllCountries ? (
+            <SelectItem
+              value={SHOW_MORE_COUNTRIES}
+              className="text-muted-foreground"
+              // 它只是个展开开关，不承担选中：Radix 在鼠标 pointerup / 触屏 click /
+              // 键盘 Enter 里才提交选中并关下拉，这里先拦掉默认行为，下拉就留在原地铺开
+              onPointerUp={(event) => {
+                if (event.pointerType === "mouse") {
+                  event.preventDefault();
+                  setShowAllCountries(true);
+                }
+              }}
+              onClick={(event) => {
+                event.preventDefault();
+                setShowAllCountries(true);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  setShowAllCountries(true);
+                }
+              }}
+            >
+              {`更多国家 (${countries.length - visibleCountries.length})…`}
+            </SelectItem>
+          ) : null}
         </SelectContent>
       </Select>
 
