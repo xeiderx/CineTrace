@@ -107,7 +107,9 @@ export default async function LibraryPage({
               ? ` · 第 ${result.page} / ${result.pageCount} 页`
               : null}
           </p>
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+          {/* 栅格列数与 LIBRARY_PAGE_SIZE 联动：20 在 2/4/5 列下都排得满，
+              所以这里不设 3 列档——多一档就会在末行留出空位 */}
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 xl:grid-cols-5">
             {result.items.map((item) => {
               const progress = progressLabel({
                 mediaType: item.mediaType,

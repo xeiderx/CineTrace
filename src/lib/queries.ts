@@ -311,10 +311,10 @@ export function listWorks(filters: WorkFilters = {}): WorkListItem[] {
 
 /**
  * 档案库每页作品数。
- * 取 24 是因为在常用的 2/3/4 列栅格下都能整行排满，
- * 只有 xl 的 5 列末行会不满，视觉上可接受。
+ * 取 20 是为了在 2/4/5 列三档栅格下都能整行排满（对应手机 / 平板起 / 宽屏），
+ * 不会在末行留下空位——格里宁可少几部，也不要一格突兀的空白。
  */
-export const LIBRARY_PAGE_SIZE = 24;
+export const LIBRARY_PAGE_SIZE = 20;
 
 export type PagedResult<T> = {
   items: T[];
