@@ -272,6 +272,60 @@ export function listWorks(filters: WorkFilters = {}): WorkListItem[] {
   return sortWorks(items, filters.sort ?? "recent");
 }
 
+/**
+ * 档案库每页作品数。
+ * 取 24 是因为在常用的 2/3/4 列栅格下都能整行排满，
+ * 只有 xl 的 5 列末行会不满，视觉上可接受。
+ */
+export const LIBRARY_PAGE_SIZE = 24;
+
+export type PagedResult<T> = {
+  items: T[];
+  /** 当前页码，已收敛到 1..pageCount */
+  page: number;
+  pageSize: number;
+  /** 满足筛选条件的作品总数 */
+  total: number;
+  /** 总页数，无结果时仍为 1，便于直接展示「第 1 / 1 页」 */
+  pageCount: number;
+};
+
+function toPositiveInt(value: number, fallback: number): number {
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+}
+
+/**
+ * 档案库分页查询。
+ *
+ * 排序口径依赖观影流水的聚合结果（最近观看时间、最近评分），
+ * SQL 里要写成相关子查询才等价；而「按片名」用的
+ * `localeCompare(..., "zh-CN")` SQLite 无法复现。
+ * 因此这里沿用 listWorks 的全量聚合，再在内存里切片：
+ * 单用户库量级下开销可忽略，换来的是分页前后排序结果完全一致。
+ */
+export function listWorksPage(
+  filters: WorkFilters = {},
+  page = 1,
+  pageSize = LIBRARY_PAGE_SIZE,
+): PagedResult<WorkListItem> {
+  const size = toPositiveInt(pageSize, LIBRARY_PAGE_SIZE);
+  const all = listWorks(filters);
+  const total = all.length;
+  const pageCount = Math.max(1, Math.ceil(total / size));
+  // 手改 URL、筛选后页数变少等情况都会让页码越界，统一收敛，
+  // 否则用户会看到一页空白，误以为数据没了
+  const current = Math.min(toPositiveInt(page, 1), pageCount);
+  const start = (current - 1) * size;
+
+  return {
+    items: all.slice(start, start + size),
+    page: current,
+    pageSize: size,
+    total,
+    pageCount,
+  };
+}
+
 function sortWorks(items: WorkListItem[], sort: NonNullable<WorkFilters["sort"]>) {
   const sorted = [...items];
   switch (sort) {

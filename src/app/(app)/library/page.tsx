@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Film, Library as LibraryIcon } from "lucide-react";
 import { LibraryFilters } from "@/components/library/library-filters";
+import { LibraryPagination } from "@/components/library/library-pagination";
 import { WorkSearchCreateDialog } from "@/components/library/work-search-create-dialog";
 import {
   RatingStars,
@@ -16,7 +17,7 @@ import { formatDate, parseStringList } from "@/lib/labels";
 import {
   listCountryFacets,
   listGenreFacets,
-  listWorks,
+  listWorksPage,
   type WorkFilters,
 } from "@/lib/queries";
 
@@ -42,7 +43,12 @@ export default async function LibraryPage({
     sort: (pick("sort") as WorkFilters["sort"]) ?? "recent",
   };
 
-  const items = listWorks(filters);
+  // 手改 URL 可能带来非法页码，交给 listWorksPage 收敛到有效范围
+  const requestedPage = Number.parseInt(pick("page") ?? "", 10);
+  const result = listWorksPage(
+    filters,
+    Number.isNaN(requestedPage) ? 1 : requestedPage,
+  );
   const hasAnyFilter = Boolean(
     filters.q ||
       filters.mediaType ||
@@ -68,7 +74,7 @@ export default async function LibraryPage({
 
       <LibraryFilters countries={countries} genres={genres} />
 
-      {items.length === 0 ? (
+      {result.total === 0 ? (
         <EmptyState
           icon={hasAnyFilter ? Film : LibraryIcon}
           title={hasAnyFilter ? "没有符合条件的作品" : "档案库为空"}
@@ -83,10 +89,13 @@ export default async function LibraryPage({
       ) : (
         <>
           <p className="mb-4 text-xs text-muted-foreground">
-            共 {items.length} 部作品
+            共 {result.total} 部作品
+            {result.pageCount > 1
+              ? ` · 第 ${result.page} / ${result.pageCount} 页`
+              : null}
           </p>
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-            {items.map((item) => {
+            {result.items.map((item) => {
               const progress = progressLabel({
                 mediaType: item.mediaType,
                 progressSeason: item.progressSeason,
@@ -140,6 +149,8 @@ export default async function LibraryPage({
               );
             })}
           </div>
+
+          <LibraryPagination page={result.page} pageCount={result.pageCount} />
         </>
       )}
     </>

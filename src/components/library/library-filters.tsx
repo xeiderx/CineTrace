@@ -67,6 +67,9 @@ export function LibraryFilters({
       if (!value || value === ALL) params.delete(key);
       else params.set(key, value);
     }
+    // 条件或排序一变，原页码就失去意义，回到第一页，
+    // 否则可能停在越界页看到空白
+    params.delete("page");
     const query = params.toString();
     startTransition(() => router.replace(query ? `/library?${query}` : "/library"));
   }
