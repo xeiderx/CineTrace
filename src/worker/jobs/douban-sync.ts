@@ -557,6 +557,8 @@ function buildWorkValues(
     // 剧集用整剧名（剥掉「第X季」），多季条目才能收敛到同一行
     title: isTv ? baseTitleOf(item.titleCn) : item.titleCn,
     originalTitle: tmdb?.originalTitle ?? item.aliases[0] ?? null,
+    // 豆瓣原始别名留档：匹配失败时靠它复现「策略 B 挑了哪个别名」的现场
+    aliasesJson: JSON.stringify(item.aliases),
     // 豆瓣年份是「该季」的年份，仅电影直接沿用
     year: isTv ? firstSeasonYear ?? tmdb?.year ?? item.year ?? null : item.year ?? tmdb?.year ?? null,
     // 主海报用 TMDB 整剧海报，不用季海报

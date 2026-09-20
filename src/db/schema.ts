@@ -81,6 +81,12 @@ export const work = sqliteTable(
     title: text("title").notNull(),
     /** 原始名，用于匹配与展示 */
     originalTitle: text("original_title"),
+    /**
+     * 豆瓣列表页标题里的其余别名（JSON 数组，按豆瓣原序），如
+     * ["Toy Story","玩具总动员"] 中除中文名外的部分。
+     * 只作匹配留档与排查用，属描述性元数据，不入备份。
+     */
+    aliasesJson: text("aliases_json").default("[]").notNull(),
     /** 上映/首播年份。剧集记第一季首播年 */
     year: integer("year"),
     posterPath: text("poster_path"),

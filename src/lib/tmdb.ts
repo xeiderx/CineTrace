@@ -143,10 +143,21 @@ export async function tmdb(
   };
 }
 
-/** 校验某部剧是否存在指定季。策略 C 用来排除「名同但季数不够」的误匹配。 */
-export async function tvSeasonExists(tvId: number, season: number): Promise<boolean> {
-  const { error } = await requestTmdb(`tv/${tvId}/season/${season}`);
-  return !error;
+/** 剧集某一季的信息，目前只用到首播年份。 */
+type TvSeasonInfo = { airYear: number | null };
+
+/**
+ * 查某部剧的某一季。季不存在（或请求失败）返回 null，存在则返回该季信息。
+ * 策略 C 用它排除「名同但季数不够」的误匹配。
+ *
+ * 存在性与首播年份一次取回，避免为核对年份再打一次同一个接口。
+ * 用「该季首播年份」而不是剧集的 `first_air_date`：后者是第一季的日期，
+ * 拿它核对续季（如《星期三 第二季》）必然对不上。
+ */
+export async function tvSeasonInfo(tvId: number, season: number): Promise<TvSeasonInfo | null> {
+  const { data, error } = await requestTmdb<{ air_date?: string | null }>(`tv/${tvId}/season/${season}`);
+  if (error || !data) return null;
+  return { airYear: Number((data.air_date ?? "").slice(0, 4)) || null };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -545,27 +556,126 @@ function scoreOf(strategy: MatchStrategy, yearOk: boolean | null): number {
   return base + yearBonus + strategyBonus;
 }
 
-/** 策略 A：纯中文名 search/multi。 */
+/** 单次检索里最多考虑的候选条数——再往后的结果与查询词已无实质关联。 */
+const CANDIDATE_LIMIT = 8;
+
+/**
+ * 从候选里挑最可信的一个。
+ *
+ * TMDB 检索按「关键词相关度」排序，不看年份，同名作品（《局内人》
+ * Inside Man 2006 / 내부자들 2015、《乘客》2008 / 2023）会把不想要的那部
+ * 排到最前。有年份可比对时优先取年份对得上的候选，一条都对不上才退回
+ * 第一条——豆瓣年份缺失的条目仍按老行为处理。
+ */
+function pickCandidate(candidates: TmdbResult[], year: number | null): TmdbResult | null {
+  const pool = candidates.slice(0, CANDIDATE_LIMIT);
+  const first = pool[0];
+  if (!first || year === null) return first ?? null;
+  return pool.find((c) => yearCheck(year, c.year) === true) ?? first;
+}
+
+function hasYearMatch(candidates: TmdbResult[], year: number | null): boolean {
+  if (year === null) return false;
+  return candidates.slice(0, CANDIDATE_LIMIT).some((c) => yearCheck(year, c.year) === true);
+}
+
+/**
+ * 年份定向检索。
+ *
+ * `search/multi` 不支持任何年份参数（官方仅 query/include_adult/language/page），
+ * 要按年份收窄只能走类型专用接口：电影用 `primary_release_year`、
+ * 剧集用 `first_air_date_year`。仅在「不限年份的候选里一条都对不上」时
+ * 兜底调用，不给正常条目增加请求量。
+ */
+async function searchByYear(query: string, year: number): Promise<TmdbResult[]> {
+  const [movie, tv] = await Promise.all([
+    tmdb("search/movie", { query, primary_release_year: String(year) }, "movie"),
+    tmdb("search/tv", { query, first_air_date_year: String(year) }, "tv"),
+  ]);
+  return [...movie.results, ...tv.results];
+}
+
+/** 候选里没有年份对得上的，就补一次年份定向检索，并把更精确的结果排在前面。 */
+async function widenByYear(
+  candidates: TmdbResult[],
+  query: string,
+  year: number | null,
+): Promise<TmdbResult[]> {
+  if (year === null || hasYearMatch(candidates, year)) return candidates;
+  return [...(await searchByYear(query, year)), ...candidates];
+}
+
+/** 策略 A：纯中文名 search/multi；候选内按年份择优，都不符再按年份定向补检。 */
 async function strategyA(input: MatchInput): Promise<MatchHit | null> {
   if (!input.titleCn) return null;
   const { results } = await tmdb("search/multi", { query: input.titleCn });
-  const first = results[0];
-  if (!first) return null;
-  const yearOk = yearCheck(input.year, first.year);
-  return { strategy: "A", query: input.titleCn, result: first, yearOk, score: scoreOf("A", yearOk) };
+  const candidates = await widenByYear(results, input.titleCn, input.year);
+  const result = pickCandidate(candidates, input.year);
+  if (!result) return null;
+  const yearOk = yearCheck(input.year, result.year);
+  return { strategy: "A", query: input.titleCn, result, yearOk, score: scoreOf("A", yearOk) };
 }
 
-/** 策略 B：别名里挑「原文名」——同时含拉丁字母与非拉丁文字，说明是原始片名。 */
+/** 原文名的常见形态：拉丁字母与另一种文字并存（「Toy Story / 玩具总动员」）。 */
+const HAS_LATIN_RE = /[a-zA-Z]/;
+const HAS_NON_LATIN_RE = /[\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF\u0600-\u06FF\u0F00-\u0FFF]/;
+
+/** 别名最多试几个，避免个别条目的别名列表过长拖慢同步。 */
+const ALIAS_TRY_LIMIT = 3;
+
+/**
+ * 别名检索的尝试顺序：先「原文名」特征最强的，再其余（按豆瓣原序）。
+ *
+ * 旧实现只用白名单正则挑别名，只认「拉丁字母 + 泰文/假名/汉字」这一种组合，
+ * 韩文（내부자들）、波斯文（بچه های آسمان）、藏文（དབུགས་ལྒང་།）以及纯中文
+ * 的繁体别名（飲食男女）全被挡在门外，这些条目根本没走到策略 B。现在不再
+ * 排除任何字种，只调整顺序。
+ */
+function aliasQueries(input: MatchInput): string[] {
+  const seen = new Set<string>([input.titleCn]);
+  const rest: string[] = [];
+  for (const raw of input.aliases) {
+    const alias = raw.trim();
+    if (!alias || seen.has(alias)) continue;
+    seen.add(alias);
+    rest.push(alias);
+  }
+  const preferred = rest.filter((a) => HAS_LATIN_RE.test(a) && HAS_NON_LATIN_RE.test(a));
+  const preferredSet = new Set(preferred);
+  return [...preferred, ...rest.filter((a) => !preferredSet.has(a))].slice(0, ALIAS_TRY_LIMIT);
+}
+
+/**
+ * 策略 B：逐个试别名（原文名优先）。第一个年份对得上的即命中；
+ * 豆瓣无年份可比时沿用老行为——取第一个有结果的别名。
+ *
+ * 与策略 A 同样做年份定向补检：韩文、日文原名在 TMDB 上同名条目更多，
+ * 只靠相关度排序更容易挑错年份。
+ */
 async function strategyB(input: MatchInput): Promise<MatchHit | null> {
-  const original = input.aliases.find(
-    (a) => /[a-zA-Z\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF]/.test(a) && /[a-zA-Z\u0E00-\u0E7F\u3040-\u30FF]/.test(a),
-  );
-  if (!original) return null;
-  const { results } = await tmdb("search/multi", { query: original });
-  const first = results[0];
-  if (!first) return null;
-  const yearOk = yearCheck(input.year, first.year);
-  return { strategy: "B", query: original, result: first, yearOk, score: scoreOf("B", yearOk) };
+  let fallback: { query: string; result: TmdbResult; yearOk: boolean | null } | null = null;
+
+  for (const query of aliasQueries(input)) {
+    const { results } = await tmdb("search/multi", { query });
+    const candidates = await widenByYear(results, query, input.year);
+    const result = pickCandidate(candidates, input.year);
+    if (!result) continue;
+
+    const yearOk = yearCheck(input.year, result.year);
+    if (yearOk !== false) return { strategy: "B", query, result, yearOk, score: scoreOf("B", yearOk) };
+
+    fallback ??= { query, result, yearOk };
+    await sleep(STRATEGY_GAP_MS);
+  }
+
+  if (!fallback) return null;
+  return {
+    strategy: "B",
+    query: fallback.query,
+    result: fallback.result,
+    yearOk: fallback.yearOk,
+    score: scoreOf("B", fallback.yearOk),
+  };
 }
 
 /** 中文数字转阿拉伯数字，供「第X季」解析使用（季数不会超过十，朴素替换足够）。 */
@@ -609,7 +719,14 @@ export function baseTitleOf(title: string): string {
   return m?.[1]?.trim() || title.trim();
 }
 
-/** 策略 C：中文名去掉「第X季」后 search/tv，并要求该季真实存在。 */
+/**
+ * 策略 C：中文名去掉「第X季」后 search/tv，并要求该季真实存在。
+ *
+ * 年份校验在这里只记分、不改判定：该季首播年与豆瓣年份比对的结果只进
+ * `score`，命中条件仍只看「该季存在」。剧集续季的豆瓣年份与 TMDB 季首播年
+ * 常有出入（重制、跨年播出），拿年份否决会误伤；但分数记下来能让
+ * 「年份不符的剧集匹配」在排查时现形。
+ */
 async function strategyC(input: MatchInput): Promise<MatchHit | null> {
   const season = parseSeasonNumber(input.titleCn);
   const base = baseTitleOf(input.titleCn);
@@ -618,9 +735,11 @@ async function strategyC(input: MatchInput): Promise<MatchHit | null> {
   const { results } = await tmdb("search/tv", { query: base }, "tv");
   const first = results[0];
   if (!first) return null;
-  if (!(await tvSeasonExists(first.tmdbId, season))) return null;
+  const info = await tvSeasonInfo(first.tmdbId, season);
+  if (!info) return null;
 
-  return { strategy: "C", query: base, result: first, yearOk: null, score: scoreOf("C", null) };
+  const yearOk = yearCheck(input.year, info.airYear);
+  return { strategy: "C", query: base, result: first, yearOk, score: scoreOf("C", yearOk) };
 }
 
 function yearCheck(doubanYear: number | null, tmdbYear: number | null): boolean | null {
@@ -648,7 +767,7 @@ export async function matchWork(input: MatchInput): Promise<MatchOutcome> {
   await sleep(STRATEGY_GAP_MS);
   const c = await strategyC(input);
   if (c) return { ok: true, hit: c };
-  // C 的命中条件已含季存在校验，走到这里说明剧集路径也没戏
+  // C 的命中条件已含季存在校验；年份只记分不否决，走到这里说明剧集路径也没戏
 
   const best = attempts.sort((x, y) => y.score - x.score)[0];
   if (best) {
