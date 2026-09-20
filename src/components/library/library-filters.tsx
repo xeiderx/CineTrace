@@ -13,6 +13,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  DOUBAN_REMOVED_FILTER,
+  DOUBAN_REMOVED_LABEL,
   MATCH_FILTER_OPTIONS,
   MEDIA_TYPE_LABELS,
   VIEW_STATUS_LABELS,
@@ -46,6 +48,7 @@ export function LibraryFilters({
   const mediaType = searchParams.get("type") ?? ALL;
   const status = searchParams.get("status") ?? ALL;
   const matchStatus = searchParams.get("match") ?? ALL;
+  const removed = searchParams.get("removed") ?? ALL;
   const country = searchParams.get("country") ?? ALL;
   const genre = searchParams.get("genre") ?? ALL;
   const sort = searchParams.get("sort") ?? "recent";
@@ -78,6 +81,7 @@ export function LibraryFilters({
     mediaType !== ALL ||
     status !== ALL ||
     matchStatus !== ALL ||
+    removed !== ALL ||
     country !== ALL ||
     genre !== ALL ||
     sort !== "recent";
@@ -153,6 +157,18 @@ export function LibraryFilters({
               {item.label}
             </SelectItem>
           ))}
+        </SelectContent>
+      </Select>
+
+      <Select value={removed} onValueChange={(v) => apply({ removed: v })}>
+        <SelectTrigger className="h-9 w-28" aria-label="豆瓣标记筛选">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={ALL}>全部条目</SelectItem>
+          <SelectItem value={DOUBAN_REMOVED_FILTER}>
+            {DOUBAN_REMOVED_LABEL}
+          </SelectItem>
         </SelectContent>
       </Select>
 

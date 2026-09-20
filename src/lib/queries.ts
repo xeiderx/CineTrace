@@ -26,7 +26,7 @@ import {
   type Work,
 } from "@/db/schema";
 import { pendingMetadataWhere } from "@/lib/backup";
-import { PENDING_METADATA_FILTER } from "@/lib/labels";
+import { DOUBAN_REMOVED_FILTER, PENDING_METADATA_FILTER } from "@/lib/labels";
 
 /* -------------------------------------------------------------------------- */
 /*                                  展示辅助                                    */
@@ -115,6 +115,8 @@ export type WorkFilters = {
   country?: string;
   /** 类型标签，精确匹配 genres 数组里的一项 */
   genre?: string;
+  /** 只留含「豆瓣已移除」记录的作品，取值 DOUBAN_REMOVED_FILTER */
+  removed?: string;
   sort?: "recent" | "rating" | "title" | "year";
 };
 
@@ -168,6 +170,8 @@ export type WorkListItem = Work & {
   progressSeason: number | null;
   progressEpisode: number | null;
   episodesWatched: number | null;
+  /** 名下带有「豆瓣已移除」标记的记录条数 */
+  removedCount: number;
   tags: Tag[];
 };
 
@@ -237,6 +241,13 @@ export function listWorks(filters: WorkFilters = {}): WorkListItem[] {
     );
   }
 
+  // 「豆瓣已移除」：只看名下带有该标记记录的作品，同样用子查询
+  if (filters.removed === DOUBAN_REMOVED_FILTER) {
+    conditions.push(
+      sql`exists (select 1 from ${viewRecord} where ${viewRecord.workId} = ${work.id} and ${viewRecord.doubanRemovedAt} is not null)`,
+    );
+  }
+
   const works = db
     .select()
     .from(work)
@@ -290,6 +301,7 @@ export function listWorks(filters: WorkFilters = {}): WorkListItem[] {
       progressSeason: latest?.progressSeason ?? null,
       progressEpisode: latest?.progressEpisode ?? null,
       episodesWatched: latest?.episodesWatched ?? null,
+      removedCount: own.filter((r) => r.doubanRemovedAt != null).length,
       tags: tagsByWork.get(w.id) ?? [],
     };
   });
@@ -516,6 +528,12 @@ export type OverviewStats = {
   lastYearCount: number;
   /** 看过 2 次及以上的作品数，按作品去重 */
   rewatchWorkCount: number;
+  /**
+   * 带「豆瓣已移除」标记的流水条数。这些记录仍在库里、仍计入上面的
+   * watchedRecordCount，只是最后一次全量同步在豆瓣列表上没再见到它们；
+   * 单独列出来是为了让用户决定要不要清理。
+   */
+  doubanRemovedCount: number;
 };
 
 export function getOverviewStats(): OverviewStats {
@@ -562,6 +580,13 @@ export function getOverviewStats(): OverviewStats {
       .where(gt(viewRecord.watchIndex, 1))
       .get()?.n ?? 0;
 
+  const doubanRemovedCount =
+    db
+      .select({ n: count() })
+      .from(viewRecord)
+      .where(isNotNull(viewRecord.doubanRemovedAt))
+      .get()?.n ?? 0;
+
   return {
     workCount: movieCount + tvCount,
     movieCount,
@@ -572,6 +597,7 @@ export function getOverviewStats(): OverviewStats {
     thisYearCount: dateStats?.thisYearCount ?? 0,
     lastYearCount: dateStats?.lastYearCount ?? 0,
     rewatchWorkCount,
+    doubanRemovedCount,
   };
 }
 

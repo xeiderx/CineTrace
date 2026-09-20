@@ -159,6 +159,23 @@ export async function deleteWorkAction(formData: FormData): Promise<void> {
   redirect("/library");
 }
 
+/**
+ * 档案库列表页的删除。与详情页的 deleteWorkAction 只差一件事：不 redirect。
+ *
+ * 列表页的筛选条件与页码都在 URL 上，redirect("/library") 会把它们一并清掉，
+ * 删完一条就跳回未筛选的第一页。这里只做 revalidatePath，
+ * 当前路由带着原有的 query 重新渲染，筛选与页码自然保留。
+ */
+export async function deleteWorkInListAction(formData: FormData): Promise<void> {
+  const id = int(formData, "id");
+  if (id == null) return;
+
+  db.delete(viewRecord).where(eq(viewRecord.workId, id)).run();
+  db.delete(work).where(eq(work.id, id)).run();
+
+  refreshLibrary(id);
+}
+
 /* -------------------------------------------------------------------------- */
 /*                              手动重新匹配 TMDB                               */
 /* -------------------------------------------------------------------------- */

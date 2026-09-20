@@ -7,7 +7,7 @@ import { SyncCards } from "@/components/overview/sync-cards";
 import { WorkPoster } from "@/components/library/work-card";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { viewStatusLabel, viewStatusTone } from "@/lib/labels";
+import { DOUBAN_REMOVED_FILTER, viewStatusLabel, viewStatusTone } from "@/lib/labels";
 import { getOverviewStats, listRecentWatches } from "@/lib/queries";
 import { getSetting } from "@/lib/settings";
 import { getSyncCardsState } from "@/lib/sync-status-server";
@@ -111,6 +111,20 @@ export default function OverviewPage() {
             豆瓣「已看」声明 {declaredWatched} 条 · 本地已抓{" "}
             {stats.watchedRecordCount} 条 · 差 {watchedGap} 条 ｜ 差额来自豆瓣已删除、
             合并或转为私密的条目，它们仍计入豆瓣总数但不再出现在列表里，无法抓取
+          </p>
+        ) : null}
+        {/* 有标记才提示：没标记说明全量同步没发现任何条目从豆瓣列表上消失。
+            豆瓣把它删除、合并或转为私密后，本地流水照旧保留，只是打上标记，
+            清不清理交给用户自己决定，所以这里只给条数与入口，不做任何自动删除。 */}
+        {stats.doubanRemovedCount > 0 ? (
+          <p className="mt-3 text-xs text-muted-foreground">
+            有 {stats.doubanRemovedCount} 条记录在最后一次全量同步中已不在豆瓣列表上 ｜{" "}
+            <Link
+              href={`/library?removed=${DOUBAN_REMOVED_FILTER}`}
+              className="text-primary hover:underline"
+            >
+              去档案库查看
+            </Link>
           </p>
         ) : null}
       </section>

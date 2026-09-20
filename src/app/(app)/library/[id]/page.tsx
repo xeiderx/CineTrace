@@ -21,6 +21,7 @@ import {
 import { EmptyState } from "@/components/layout/empty-state";
 import { Button } from "@/components/ui/button";
 import {
+  DOUBAN_REMOVED_LABEL,
   formatDate,
   formatDateRange,
   formatMinutes,
@@ -131,6 +132,16 @@ function ViewRecordItem({
                 : "未填写日期"}
           </span>
           <PlatformChip record={record} />
+          {/* 豆瓣把它删掉/合并/转私密后本地仍留着这条流水，只是打上时间戳。
+              清理与否由用户决定，因此只提示、不自动删。 */}
+          {record.doubanRemovedAt ? (
+            <span
+              className="inline-flex h-5 items-center rounded-4xl bg-amber-500/15 px-2 text-xs font-medium text-amber-400"
+              title="最后一次全量同步时，这条记录已不在豆瓣列表上"
+            >
+              {DOUBAN_REMOVED_LABEL}
+            </span>
+          ) : null}
         </div>
 
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
@@ -317,6 +328,7 @@ export default async function WorkDetailPage({
               status={latest?.status ?? null}
               watchCount={records.filter((r) => r.watchedAt != null || r.status === "watched").length}
               country={countries[0] ?? null}
+              removedCount={records.filter((r) => r.doubanRemovedAt != null).length}
             />
           </div>
 

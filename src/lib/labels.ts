@@ -51,6 +51,15 @@ export const MATCH_FILTER_OPTIONS: { value: string; label: string }[] = [
 ];
 
 /**
+ * 「豆瓣已移除」是观影流水上的派生标记（`view_record.douban_removed_at` 非空），
+ * 不是状态或匹配状态的取值，因此单独作为档案库的一个筛选项。
+ */
+export const DOUBAN_REMOVED_FILTER = "douban_removed";
+
+/** 「豆瓣已移除」标记的统一文案，徽标、筛选下拉与提示行共用 */
+export const DOUBAN_REMOVED_LABEL = "豆瓣已移除";
+
+/**
  * 匹配状态的展示文案。手动绑定但拿到了 TMDB 数据的直接算「已匹配」，
  * 只有始终没有 TMDB 数据的手工条目才叫「自由添加」。
  */

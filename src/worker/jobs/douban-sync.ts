@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { syncIssue, viewRecord, work, type NewWork } from "@/db/schema";
 import { getSetting, setSetting } from "@/lib/settings";
@@ -152,6 +152,13 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
 
   const stats = { itemsSeen: 0, itemsNew: 0, itemsUpdated: 0, errorCount: 0 };
 
+  /**
+   * 本轮在豆瓣列表上实际见到的 sourceKey。仅用于全量轮跑完后判定「哪些本地记录
+   * 已经不在豆瓣列表里了」——豆瓣删除/合并/转私密的条目不会给出任何信号，
+   * 只能靠「整轮翻完都没见到」来反推。
+   */
+  const seenSourceKeys = new Set<string>();
+
   /** 记录一条可复现的错误，供设置页排查。reason 取值受表约束限制。 */
   const issue = (
     reason: "no_match" | "low_score" | "network" | "parse" | "blocked",
@@ -185,6 +192,9 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
     }
 
     const sourceKey = `douban:${doubanId}`;
+    // 先登记「见到过」再走后面可能抛错的落地流程：条目确实还在豆瓣列表上，
+    // 就不该因为这一条本地处理失败而被当成「已移除」
+    seenSourceKeys.add(sourceKey);
     const existingRecord = db
       .select({ id: viewRecord.id, workId: viewRecord.workId, watchedAt: viewRecord.watchedAt })
       .from(viewRecord)
@@ -228,6 +238,8 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
       // 豆瓣一季一条记录，季号落在记录上，详情页据此按季展示；
       // 标题里没有季标识的条目不写，避免覆盖手工填的进度
       ...(season !== null ? { progressSeason: season } : {}),
+      // 条目重新出现在列表上，之前打的「已移除」标记必须撤掉
+      doubanRemovedAt: null,
     };
 
     // sourceKey 上的唯一索引保证重跑只更新不新增
@@ -279,6 +291,12 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
   let watchedDeclaredTotal: number | null = null;
   /** 因作息窗口结束而暂停的位置；与「被豆瓣拒绝」不同，下一轮直接续跑 */
   let pausedAt: { status: ViewStatus; start: number } | null = null;
+  /**
+   * 「看过」列表这一轮是否从第 1 页一路翻到了真实末页。
+   * 只有这种完整的一轮才拿得到全量条目，才能反推「哪些记录已不在豆瓣列表里」；
+   * 续跑（从断点页起）与被拒/暂停（剩下没翻）都不算。
+   */
+  let watchedTraversed = false;
 
   for (const list of enabledLists) {
     const label = VIEW_STATUS_LABELS[list.status];
@@ -288,6 +306,8 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
     let start = listStart;
     let processed = start;
     let blockedAtFirstPage = false;
+    /** 这一列表是否翻到了真实末页（而非被拒、暂停或撞上 MAX_START 截断） */
+    let reachedEnd = false;
 
     while (start <= MAX_START) {
       // 作息窗口只在任务启动前由调度器检查一次，跑起来之后就没人管了。
@@ -332,7 +352,10 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
       }
 
       const items = parseListPage(html);
-      if (items.length === 0) break; // 翻到末页
+      if (items.length === 0) {
+        reachedEnd = true; // 翻到末页
+        break;
+      }
       const hasNext = parseHasNext(html);
 
       // 早停信号：这一页里出现了库里已有且元数据齐全的条目。
@@ -353,12 +376,27 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
       start += LIST_PAGE_SIZE;
       // 增量轮：首页见到已知条目就说明后面只会更旧，不必再翻
       if (!full && sawKnown) break;
-      if (pageTotal !== null && processed >= pageTotal) break;
+      if (pageTotal !== null && processed >= pageTotal) {
+        reachedEnd = true; // 声明的条数都已翻完
+        break;
+      }
       // 末页判定以分页器的「后页」链接为准。
       // 不满一页不能当末页——豆瓣在条目被删或转私密时会给出 14 条的中间页，
       // 早期按短页退出导致列表被截断在 119 条（总数其实有 2198）。
-      if (hasNext === false) break;
+      if (hasNext === false) {
+        reachedEnd = true;
+        break;
+      }
+      // 分页器结构异常时只能按短页兜底：这种「猜」出来的末页不足以支撑
+      // 「已移除」判定，所以不置 reachedEnd。
       if (hasNext === null && items.length < LIST_PAGE_SIZE) break;
+    }
+
+    // 必须从第 1 页起翻且翻到末页，seenSourceKeys 才真正覆盖整份「看过」列表。
+    // 续跑轮（listStart > 0）只翻了后半段，前半段这一轮压根没见过，
+    // 拿去比对会把上千条正常记录误标成已移除。
+    if (list.status === "watched" && listStart === 0 && !blockedAtFirstPage) {
+      watchedTraversed = reachedEnd;
     }
 
     if (pausedAt !== null) break; // 出窗了，后面的列表留给下一轮
@@ -409,7 +447,18 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
     setSetting("douban.lastManualIncAt", new Date().toISOString());
   }
 
-  const summary = `${mode}同步共 ${stats.itemsSeen} 条（新增 ${stats.itemsNew} / 更新 ${stats.itemsUpdated}），错误 ${stats.errorCount} 条`;
+  // 「豆瓣已移除」标记：只有这轮把「看过」列表从第 1 页完整翻到末页时才敢做。
+  // 增量轮只翻首页、续跑轮只翻后半段、被拒或出窗暂停时剩下的页没翻——
+  // 这些情况下 seenSourceKeys 都不是全量，拿去比对会大面积误标。
+  // 想看/在看两个小列表不参与比对：它们可以单独关掉同步，关掉时条目压根没进集合。
+  let removedMarked = 0;
+  if (full && watchedTraversed) {
+    removedMarked = markDoubanRemoved(seenSourceKeys);
+  }
+
+  const summary = `${mode}同步共 ${stats.itemsSeen} 条（新增 ${stats.itemsNew} / 更新 ${stats.itemsUpdated}），错误 ${stats.errorCount} 条${
+    removedMarked > 0 ? `，新标记「豆瓣已移除」${removedMarked} 条` : ""
+  }`;
   if (stopped) return failure(stats, stopped);
   return { ...stats, message: summary };
 }
@@ -436,6 +485,45 @@ function isFullSyncDue(): boolean {
   const at = Date.parse(last);
   if (Number.isNaN(at)) return true;
   return Date.now() - at >= FULL_SYNC_INTERVAL_MS;
+}
+
+/**
+ * 全量翻完一轮后，把本地「看过」记录里本轮没见到的打上「豆瓣已移除」标记。
+ *
+ * 豆瓣对删除/合并/转私密这三种变动不给任何信号，条目只是从列表里消失，
+ * 所以只能反推：整份「看过」列表都翻过了、这一条却不在其中，那它多半已经不在了。
+ * 删除/合并/转私密在列表上无法区分，这也是「只标记、不自动删」的原因——
+ * 标记可逆，真删了记录里的评分和短评就找不回来了。
+ *
+ * 只处理「看过」：想看/在看两个小列表可以单独关掉同步，关掉时它们的条目
+ * 根本不会进 seenSourceKeys，一并比对会把整个列表误标成已移除。
+ * 重新出现的条目会在 processItem 里把标记清掉。
+ *
+ * @param seen 本轮在豆瓣列表上见到的全部 sourceKey
+ * @returns 本轮新打上标记的记录数
+ */
+function markDoubanRemoved(seen: ReadonlySet<string>): number {
+  const candidates = db
+    .select({ id: viewRecord.id, sourceKey: viewRecord.sourceKey })
+    .from(viewRecord)
+    .where(
+      and(
+        eq(viewRecord.source, "douban"),
+        eq(viewRecord.status, "watched"),
+        // 已标记过的不用再看：重复写只会把「移除时间」一直往后推
+        isNull(viewRecord.doubanRemovedAt),
+      ),
+    )
+    .all();
+
+  const now = new Date();
+  let marked = 0;
+  for (const row of candidates) {
+    if (seen.has(row.sourceKey)) continue;
+    db.update(viewRecord).set({ doubanRemovedAt: now }).where(eq(viewRecord.id, row.id)).run();
+    marked += 1;
+  }
+  return marked;
 }
 
 /* -------------------------------------------------------------------------- */

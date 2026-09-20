@@ -1,0 +1,1 @@
+ALTER TABLE `view_record` ADD `douban_removed_at` integer;

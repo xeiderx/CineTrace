@@ -232,6 +232,14 @@ export const viewRecord = sqliteTable(
     /** 累计已看集数 */
     episodesWatched: integer("episodes_watched"),
 
+    /* ---- 豆瓣侧变动 ---- */
+    /**
+     * 豆瓣已移除标记：全量同步跑完时，记录在豆瓣列表里再也看不到的时间。
+     * 豆瓣把它删除/合并/转私密后本地记录仍会保留（同步只更新不删除），
+     * 打上这个时间戳供界面提示，清理与否由用户自己决定。
+     */
+    doubanRemovedAt: integer("douban_removed_at", { mode: "timestamp" }),
+
     createdAt: integer("created_at", { mode: "timestamp" })
       .notNull()
       .default(sql`(unixepoch())`),

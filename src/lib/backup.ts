@@ -58,6 +58,8 @@ export type BackupViewRecord = {
   progressSeason: number | null;
   progressEpisode: number | null;
   episodesWatched: number | null;
+  /** 「豆瓣已移除」标记时间，ISO 字符串。老备份文件没有这个字段，按未标记处理 */
+  doubanRemovedAt: string | null;
 };
 
 export type BackupFile = {
@@ -89,6 +91,16 @@ export type ImportStats = {
   collections: number;
   collectionItems: number;
 };
+
+/**
+ * 备份里的时间字段统一用 ISO 字符串，读到脏值或缺失一律当未标记，
+ * 免得一份手改过的备份文件把导入整个搞挂。
+ */
+function parseBackupDate(value: unknown): Date | null {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
 
 /** work 在备份文件内的稳定引用键：优先 TMDB，其次豆瓣，最后标题+年份。 */
 function workKeyOf(row: {
@@ -175,6 +187,7 @@ export function exportBackup(): BackupFile {
       progressSeason: row.progressSeason,
       progressEpisode: row.progressEpisode,
       episodesWatched: row.episodesWatched,
+      doubanRemovedAt: row.doubanRemovedAt?.toISOString() ?? null,
     }));
 
   const workTags = db
@@ -475,6 +488,8 @@ export function importBackup(file: BackupFile): ImportStats {
         progressSeason: row.progressSeason ?? null,
         progressEpisode: row.progressEpisode ?? null,
         episodesWatched: row.episodesWatched ?? null,
+        // 老备份文件没有这个字段：按未标记处理，不会凭空造出「豆瓣已移除」
+        doubanRemovedAt: parseBackupDate(row.doubanRemovedAt),
       };
       tx.insert(viewRecord)
         .values({ ...values, sourceKey: row.sourceKey })

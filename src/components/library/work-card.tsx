@@ -1,6 +1,6 @@
 import { Star } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { mediaTypeLabel, viewStatusLabel, viewStatusTone } from "@/lib/labels";
+import { DOUBAN_REMOVED_LABEL, mediaTypeLabel, viewStatusLabel, viewStatusTone } from "@/lib/labels";
 import { posterUrl } from "@/lib/queries";
 
 /** 五角星评分展示，只读 */
@@ -83,6 +83,7 @@ export function WorkMetaBadges({
   status,
   watchCount,
   country,
+  removedCount = 0,
 }: {
   mediaType: string;
   year: number | null;
@@ -90,6 +91,8 @@ export function WorkMetaBadges({
   watchCount: number;
   /** 制片国家，列表里只展示第一个，多了卡片放不下 */
   country?: string | null;
+  /** 「豆瓣已移除」标记的流水条数，0 表示不展示 */
+  removedCount?: number;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-1.5">
@@ -111,6 +114,14 @@ export function WorkMetaBadges({
       ) : null}
       {watchCount > 1 ? (
         <span className="text-xs text-muted-foreground">{watchCount} 刷</span>
+      ) : null}
+      {removedCount > 0 ? (
+        <span
+          className="inline-flex h-5 items-center rounded-4xl bg-amber-500/15 px-2 text-xs font-medium text-amber-400"
+          title="最后一次全量同步时，这些记录已不在豆瓣列表上"
+        >
+          {DOUBAN_REMOVED_LABEL}
+        </span>
       ) : null}
     </div>
   );

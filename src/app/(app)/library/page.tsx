@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Film, Library as LibraryIcon } from "lucide-react";
+import { deleteWorkInListAction } from "@/app/actions/library";
+import { ConfirmDeleteButton } from "@/components/library/confirm-delete-button";
 import { LibraryFilters } from "@/components/library/library-filters";
 import { LibraryPagination } from "@/components/library/library-pagination";
 import { WorkSearchCreateDialog } from "@/components/library/work-search-create-dialog";
@@ -40,6 +42,7 @@ export default async function LibraryPage({
     matchStatus: pick("match") ?? undefined,
     country: pick("country") ?? undefined,
     genre: pick("genre") ?? undefined,
+    removed: pick("removed") ?? undefined,
     sort: (pick("sort") as WorkFilters["sort"]) ?? "recent",
   };
 
@@ -55,7 +58,8 @@ export default async function LibraryPage({
       filters.status ||
       filters.matchStatus ||
       filters.country ||
-      filters.genre,
+      filters.genre ||
+      filters.removed,
   );
 
   // 只在「全部」或「看过」这两种筛选下并列流水数：其余筛选（想看/在看）与「已看流水」
@@ -112,49 +116,65 @@ export default async function LibraryPage({
                 episodesWatched: item.episodesWatched,
               });
               return (
-                <Link
-                  key={item.id}
-                  href={`/library/${item.id}`}
-                  className="group space-y-2.5 rounded-xl outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-                >
-                  <div className="relative overflow-hidden rounded-lg ring-1 ring-foreground/10">
-                    <WorkPoster title={item.title} posterPath={item.posterPath} />
-                    {item.latestRating ? (
-                      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-2 pb-1.5 pt-6">
-                        <RatingStars value={item.latestRating} />
-                      </div>
-                    ) : null}
-                  </div>
+                // 删除按钮与链接是兄弟节点而非嵌套：按钮放进 <Link> 内部时，
+                // 点它会连带触发跳转，键盘与读屏也会把它当成链接的一部分。
+                <div key={item.id} className="group relative">
+                  <Link
+                    href={`/library/${item.id}`}
+                    className="block space-y-2.5 rounded-xl outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                  >
+                    <div className="relative overflow-hidden rounded-lg ring-1 ring-foreground/10">
+                      <WorkPoster title={item.title} posterPath={item.posterPath} />
+                      {item.latestRating ? (
+                        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-2 pb-1.5 pt-6">
+                          <RatingStars value={item.latestRating} />
+                        </div>
+                      ) : null}
+                    </div>
 
-                  <div className="space-y-1.5">
-                    <p className="line-clamp-1 text-sm font-medium" title={item.title}>
-                      {item.title}
-                    </p>
-                    <WorkMetaBadges
-                      mediaType={item.mediaType}
-                      year={item.year}
-                      status={item.latestStatus}
-                      watchCount={item.watchCount}
-                      country={parseStringList(item.countries)[0] ?? null}
-                    />
-                    {progress ? (
-                      <p className="text-xs text-muted-foreground">{progress}</p>
-                    ) : item.lastWatchedAt ? (
-                      <p className="text-xs text-muted-foreground">
-                        {formatDate(item.lastWatchedAt)}
+                    <div className="space-y-1.5">
+                      <p className="line-clamp-1 text-sm font-medium" title={item.title}>
+                        {item.title}
                       </p>
-                    ) : null}
-                    {item.tags.length > 0 ? (
-                      <div className="flex flex-wrap gap-1 pt-0.5">
-                        {item.tags.slice(0, 3).map((t) => (
-                          <Badge key={t.id} variant="secondary" className="font-normal">
-                            {t.name}
-                          </Badge>
-                        ))}
-                      </div>
-                    ) : null}
+                      <WorkMetaBadges
+                        mediaType={item.mediaType}
+                        year={item.year}
+                        status={item.latestStatus}
+                        watchCount={item.watchCount}
+                        country={parseStringList(item.countries)[0] ?? null}
+                        removedCount={item.removedCount}
+                      />
+                      {progress ? (
+                        <p className="text-xs text-muted-foreground">{progress}</p>
+                      ) : item.lastWatchedAt ? (
+                        <p className="text-xs text-muted-foreground">
+                          {formatDate(item.lastWatchedAt)}
+                        </p>
+                      ) : null}
+                      {item.tags.length > 0 ? (
+                        <div className="flex flex-wrap gap-1 pt-0.5">
+                          {item.tags.slice(0, 3).map((t) => (
+                            <Badge key={t.id} variant="secondary" className="font-normal">
+                              {t.name}
+                            </Badge>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  </Link>
+
+                  {/* 桌面端悬停才现身，避免整屏卡片挂满垃圾桶；触屏没有 hover，
+                      用 group-focus-within 让键盘也能到达，并始终保留可点区域 */}
+                  <div className="absolute right-1.5 top-1.5 rounded-md bg-background/80 backdrop-blur transition-opacity focus-within:opacity-100 group-hover:opacity-100 md:opacity-0">
+                    <ConfirmDeleteButton
+                      action={deleteWorkInListAction}
+                      id={item.id}
+                      title={`删除《${item.title}》？`}
+                      description="作品及其全部观影记录都会被删除，此操作不可撤销。"
+                      label={`删除《${item.title}》`}
+                    />
                   </div>
-                </Link>
+                </div>
               );
             })}
           </div>
