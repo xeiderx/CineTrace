@@ -58,6 +58,12 @@ export default async function LibraryPage({
       filters.genre,
   );
 
+  // 只在「全部」或「看过」这两种筛选下并列流水数：其余筛选（想看/在看）与「已看流水」
+  // 不是同一批条目，同一个作品也可能带着旧的看过记录，并列出来只会让人算不明白。
+  const showRecordTotal =
+    (filters.status === undefined || filters.status === "watched") &&
+    result.recordTotal > result.total;
+
   // 国家与类型下拉的候选项来自全库分布，不随当前筛选收窄，
   // 免得筛完一项后其它选项消失、反而不好改条件
   const countries = listCountryFacets();
@@ -90,6 +96,9 @@ export default async function LibraryPage({
         <>
           <p className="mb-4 text-xs text-muted-foreground">
             共 {result.total} 部作品
+            {showRecordTotal
+              ? ` · ${result.recordTotal} 条看过记录（同剧多季各算一条）`
+              : null}
             {result.pageCount > 1
               ? ` · 第 ${result.page} / ${result.pageCount} 页`
               : null}

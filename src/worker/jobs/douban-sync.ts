@@ -271,6 +271,12 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
   let stopped: string | null = null;
   let totalSum = 0;
   let totalKnown = false;
+  /**
+   * 豆瓣「看过」列表声明的总条数。它与本地记录数的差额另有含义——
+   * 豆瓣把它删除/合并的条目仍计入总数、但不再出现在列表里，所以本地永远抓不全。
+   * 记下来供概览页解释这个差额，不参与任何抓取判定。
+   */
+  let watchedDeclaredTotal: number | null = null;
   /** 因作息窗口结束而暂停的位置；与「被豆瓣拒绝」不同，下一轮直接续跑 */
   let pausedAt: { status: ViewStatus; start: number } | null = null;
 
@@ -319,6 +325,11 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
         totalSum += pageTotal;
         totalKnown = true;
       }
+      // 「看过」的声明总数单独记一份。它不像上面那样要求首页——续跑时首页被跳过，
+      // 而这一页的 h1 里同样带着同一个数字，取到即可。
+      if (pageTotal !== null && list.status === "watched") {
+        watchedDeclaredTotal = pageTotal;
+      }
 
       const items = parseListPage(html);
       if (items.length === 0) break; // 翻到末页
@@ -352,6 +363,14 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
 
     if (pausedAt !== null) break; // 出窗了，后面的列表留给下一轮
     if (blockedAtFirstPage) break; // 首页都不通，后面的列表同样抓不到
+  }
+
+  // 豆瓣声明的「看过」总数任何时候都照实记下，与这轮是否跑完无关：
+  // 它只是对端的一个说法，用来解释「本地记录数为何比豆瓣少几条」，
+  // 不参与断点/冷却这类需要「真跑完」才敢写的判定。
+  // 增量轮也会抓「看过」首页，所以这个数字一样能保持新鲜。
+  if (watchedDeclaredTotal !== null) {
+    setSetting("douban.lastWatchedTotal", watchedDeclaredTotal);
   }
 
   // 出窗暂停：记下断点，本轮标 partial 且不写全量时间戳，

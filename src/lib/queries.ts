@@ -140,6 +140,12 @@ export function listGenreFacets(): FacetItem[] {
 export type WorkListItem = Work & {
   viewCount: number;
   watchCount: number;
+  /**
+   * 状态为「看过」的记录条数。与 watchCount 的差别在于后者把「有看过日期」的也算进来
+   * （用户后来把状态改成想看、但那天确实看过的那笔）。档案库顶部的流水数用这一列，
+   * 口径与豆瓣「看过」一致，才能和同步区的对照行对上。
+   */
+  watchedCount: number;
   lastWatchedAt: string | null;
   latestStatus: string | null;
   latestRating: number | null;
@@ -259,6 +265,7 @@ export function listWorks(filters: WorkFilters = {}): WorkListItem[] {
       ...w,
       viewCount: own.length,
       watchCount: own.filter((r) => r.watchedAt != null || r.status === "watched").length,
+      watchedCount: own.filter((r) => r.status === "watched").length,
       lastWatchedAt: latest?.watchedAt ?? null,
       latestStatus: latest?.status ?? null,
       latestRating: latest?.rating ?? null,
@@ -286,6 +293,11 @@ export type PagedResult<T> = {
   pageSize: number;
   /** 满足筛选条件的作品总数 */
   total: number;
+  /**
+   * 这些作品名下的「已看」流水条数。与 total 并列展示，用来消除
+   * 「一部剧算几部」的歧义——多季剧只占一行作品，每季却各有一条流水。
+   */
+  recordTotal: number;
   /** 总页数，无结果时仍为 1，便于直接展示「第 1 / 1 页」 */
   pageCount: number;
 };
@@ -311,6 +323,9 @@ export function listWorksPage(
   const size = toPositiveInt(pageSize, LIBRARY_PAGE_SIZE);
   const all = listWorks(filters);
   const total = all.length;
+  // 「已看」流水数只能在内存里加出来：它来自 listWorks 聚合出的每条 work 的 watchedCount，
+  // 而那条判定跨列，写 SQL 反而不如直接汇总清晰
+  const recordTotal = all.reduce((sum, item) => sum + item.watchedCount, 0);
   const pageCount = Math.max(1, Math.ceil(total / size));
   // 手改 URL、筛选后页数变少等情况都会让页码越界，统一收敛，
   // 否则用户会看到一页空白，误以为数据没了
@@ -322,6 +337,7 @@ export function listWorksPage(
     page: current,
     pageSize: size,
     total,
+    recordTotal,
     pageCount,
   };
 }
@@ -348,6 +364,21 @@ function sortWorks(items: WorkListItem[], sort: NonNullable<WorkFilters["sort"]>
 
 export function countWorks(): number {
   const row = db.select({ value: sql<number>`count(*)` }).from(work).get();
+  return row?.value ?? 0;
+}
+
+/**
+ * 「看过」的观影流水条数。
+ *
+ * 这是与豆瓣「已看」对得上的口径：豆瓣一季算一个独立条目，本地也一季一条记录。
+ * 它比 countWorks() 大——整季归并后多季剧只占一行 work，季数差就体现在这里。
+ */
+export function countWatchedRecords(): number {
+  const row = db
+    .select({ value: sql<number>`count(*)` })
+    .from(viewRecord)
+    .where(eq(viewRecord.status, "watched"))
+    .get();
   return row?.value ?? 0;
 }
 
@@ -472,6 +503,8 @@ export function getWorkDetail(workId: number): WorkDetail | null {
 
 export type OverviewStats = {
   workCount: number;
+  /** 「看过」流水条数，与豆瓣「已看」同口径（作品数则受整季归并影响而更少） */
+  watchedRecordCount: number;
   recordCount: number;
   totalMinutes: number;
   averageRating: number | null;
@@ -480,6 +513,7 @@ export type OverviewStats = {
 
 export function getOverviewStats(): OverviewStats {
   const workCount = countWorks();
+  const watchedRecordCount = countWatchedRecords();
 
   // 「有看过日期就算数」：状态后来被豆瓣改回「想看」的记录，那天确实看过的历史仍然成立，
   // 不能因为状态变了就把这一笔从记录数和累计时长里抹掉。
@@ -513,6 +547,7 @@ export function getOverviewStats(): OverviewStats {
 
   return {
     workCount,
+    watchedRecordCount,
     recordCount: rows.length,
     totalMinutes,
     averageRating: ratedCount > 0 ? ratingSum / ratedCount : null,
