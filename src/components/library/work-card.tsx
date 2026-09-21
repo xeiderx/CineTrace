@@ -1,4 +1,4 @@
-import { Star } from "lucide-react";
+import { Ban, CirclePause, Star, type LucideIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { DOUBAN_REMOVED_LABEL, mediaTypeLabel, viewStatusLabel, viewStatusTone } from "@/lib/labels";
 import { posterUrl } from "@/lib/queries";
@@ -44,19 +44,49 @@ function PosterFallback({ title }: { title: string }) {
 }
 
 /**
+ * 搁置与弃看的封面处理。
+ *
+ * 「在看」不加任何东西——封面本来就该是干净的。搁置是暂时的，只压一层暖色雾气
+ * 让画面退后一点；弃看是终局，直接抽掉颜色并压暗，扫一眼列表就知道这剧不追了。
+ */
+const POSTER_STATUS_STYLES: Record<
+  string,
+  { icon: LucideIcon; label: string; badge: string; image: string }
+> = {
+  on_hold: {
+    icon: CirclePause,
+    label: viewStatusLabel("on_hold"),
+    badge: "bg-amber-400/95 text-amber-950",
+    image: "opacity-80 saturate-[0.45]",
+  },
+  dropped: {
+    icon: Ban,
+    label: viewStatusLabel("dropped"),
+    badge: "bg-background/85 text-muted-foreground",
+    image: "opacity-45 grayscale",
+  },
+};
+
+/**
  * 作品卡片。海报走 TMDB 图床，手动录入的作品允许直接填外链，
  * 因此这里用原生 img 而不做域名白名单。
+ *
+ * 传了 `status` 且为搁置/弃看时，封面上会叠一层降饱和与状态角标；
+ * 其他状态（含 null）保持原样，所以档案库那几处调用不受影响。
  */
 export function WorkPoster({
   title,
   posterPath,
   className,
+  status,
 }: {
   title: string;
   posterPath: string | null;
   className?: string;
+  status?: string | null;
 }) {
   const src = posterUrl(posterPath);
+  const decoration = status ? POSTER_STATUS_STYLES[status] : undefined;
   return (
     <div
       className={`relative aspect-[2/3] w-full overflow-hidden bg-muted ${className ?? ""}`}
@@ -65,13 +95,25 @@ export function WorkPoster({
         // eslint-disable-next-line @next/next/no-img-element
         <img
           src={src}
-          alt={`${title} 海报`}
+          alt={
+            decoration
+              ? `${title} 海报（${decoration.label}）`
+              : `${title} 海报`
+          }
           loading="lazy"
-          className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
+          className={`h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03] ${decoration?.image ?? ""}`}
         />
       ) : (
         <PosterFallback title={title} />
       )}
+      {decoration ? (
+        <span
+          className={`absolute top-1 left-1 inline-flex items-center gap-0.5 rounded-4xl px-1.5 py-0.5 text-[10px] leading-none font-medium ${decoration.badge}`}
+        >
+          <decoration.icon className="size-2.5" />
+          {decoration.label}
+        </span>
+      ) : null}
     </div>
   );
 }

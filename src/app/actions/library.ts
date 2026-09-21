@@ -26,8 +26,10 @@ import {
 import {
   VIEW_RECORD_FIELD_LABELS,
   VIEW_RECORD_FIELDS,
+  VIEW_STATUS_ORDER,
   mergeCast,
   parseCast,
+  viewStatusLabel,
   type ViewRecordField,
 } from "@/lib/labels";
 import { parseManualFields, todayIso } from "@/lib/watch-progress";
@@ -1081,6 +1083,41 @@ export async function unlockViewRecordFieldsAction(
     ok: true,
     message: `已恢复跟随豆瓣：${fields.map((f) => VIEW_RECORD_FIELD_LABELS[f]).join("、")}`,
   };
+}
+
+/**
+ * 只改观看状态，不动其他字段。
+ *
+ * 不能复用 updateViewRecordAction：那个表单提交什么就写什么，缺的字段会被清成
+ * null，追剧页上点一下「搁置」不该顺手抹掉日期和短评。这里只碰 status，
+ * 并把它记进锁定名单，免得下一轮豆瓣同步又按列表改回去。
+ */
+export async function setViewRecordStatusAction(
+  _prev: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const id = int(formData, "id");
+  if (id == null) return { error: "缺少记录 ID" };
+
+  const status = required(formData, "status");
+  if (!(VIEW_STATUS_ORDER as string[]).includes(status)) {
+    return { error: "未知的观看状态" };
+  }
+
+  const row = db.select().from(viewRecord).where(eq(viewRecord.id, id)).get();
+  if (!row) return { error: "记录不存在" };
+  if (row.status === status) return { ok: true };
+
+  db.update(viewRecord)
+    .set({
+      status,
+      manualFieldsJson: nextLockedFields(row.manualFieldsJson, ["status"], []),
+    })
+    .where(eq(viewRecord.id, id))
+    .run();
+
+  refreshLibrary(row.workId ?? undefined);
+  return { ok: true, message: `已改为${viewStatusLabel(status)}` };
 }
 
 /* -------------------------------------------------------------------------- */

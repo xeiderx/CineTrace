@@ -201,7 +201,7 @@ export const viewRecord = sqliteTable(
     sourceItemId: text("source_item_id"),
 
     /* ---- 状态 ---- */
-    /** 'watched' 看过 | 'watching' 在看 | 'wish' 想看 | 'on_hold' 搁置 | 'dropped' 弃剧 */
+    /** 'watched' 看过 | 'watching' 在看 | 'wish' 想看 | 'on_hold' 搁置 | 'dropped' 弃看 */
     status: text("status").notNull().default("watched"),
 
     /* ---- 时间 ---- */

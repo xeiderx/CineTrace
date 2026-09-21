@@ -14,7 +14,7 @@ export const VIEW_STATUS_LABELS: Record<ViewStatus, string> = {
   watching: "在看",
   wish: "想看",
   on_hold: "搁置",
-  dropped: "弃剧",
+  dropped: "弃看",
 };
 
 /** 状态的展示配色，用于徽标 */

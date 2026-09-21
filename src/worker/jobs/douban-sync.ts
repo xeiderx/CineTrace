@@ -229,7 +229,7 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
     }
 
     const season = resolveProgressSeason(titleCn, workId);
-    // 状态被锁定时以本地为准：用户把某条改成「弃剧」后，不该因为豆瓣还在 collect 列表
+    // 状态被锁定时以本地为准：用户把某条改成「弃看」后，不该因为豆瓣还在 collect 列表
     // 就被改回「看过」。锁定之外的情况仍跟豆瓣走。
     const finalStatus = unlocked("status") ? status : existingRecord?.status ?? status;
     // 豆瓣三个列表互斥，把「看过」改成「想看」时条目会离开 collect 列表。

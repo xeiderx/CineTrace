@@ -232,6 +232,8 @@ export type WorkListItem = Work & {
   watchedCount: number;
   lastWatchedAt: string | null;
   latestStatus: string | null;
+  /** 最近一条流水的 id。卡片上的状态快捷切换要拿它去改，不必再查一次库 */
+  latestRecordId: number | null;
   latestRating: number | null;
   /** 最近一条观后记录上的剧集进度 */
   progressSeason: number | null;
@@ -389,6 +391,7 @@ export function listWorks(filters: WorkFilters = {}): WorkListItem[] {
       watchedCount: own.filter((r) => r.status === "watched").length,
       lastWatchedAt: latest?.watchedAt ?? null,
       latestStatus: latest?.status ?? null,
+      latestRecordId: latest?.id ?? null,
       latestRating: latest?.rating ?? null,
       progressSeason: latest?.progressSeason ?? null,
       progressEpisode: latest?.progressEpisode ?? null,
