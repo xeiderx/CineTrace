@@ -1,13 +1,17 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, CalendarDays, Clock, Film, Star, Tv } from "lucide-react";
+import { ArrowLeft, CalendarDays, Clock, Film, ListChecks, Star, Tv } from "lucide-react";
 import {
   deleteViewRecordAction,
   deleteWorkAction,
 } from "@/app/actions/library";
 import { ConfirmDeleteButton } from "@/components/library/confirm-delete-button";
 import { CastWall, type CastPortrait } from "@/components/library/cast-wall";
+import {
+  SeasonProgressPanel,
+  type PanelSeason,
+} from "@/components/library/season-progress-panel";
 import { ViewRecordDialog } from "@/components/library/view-record-dialog";
 import { WorkFormDialog } from "@/components/library/work-form-dialog";
 import { WorkMatchDialog } from "@/components/library/work-match-dialog";
@@ -20,6 +24,7 @@ import {
 } from "@/components/library/work-card";
 import { EmptyState } from "@/components/layout/empty-state";
 import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
 import {
   DOUBAN_REMOVED_LABEL,
   formatDate,
@@ -42,6 +47,7 @@ import {
   type SeasonWithRecord,
   type ViewRecordWithPlatform,
 } from "@/lib/queries";
+import { dateSourceHint, showProgressLabel, todayIso } from "@/lib/watch-progress";
 import type { Platform } from "@/db/schema";
 
 export async function generateMetadata({
@@ -176,58 +182,140 @@ function ViewRecordItem({
   );
 }
 
-/** 分季一览：TMDB 的季结构 + 该季在豆瓣的标记时间与星级 */
-function SeasonItem({ season }: { season: SeasonWithRecord }) {
+/** 日期 + 来源后缀，来源是「手动」时高亮，提示它不会被豆瓣覆盖 */
+function SeasonDate({
+  label,
+  date,
+}: {
+  label: string;
+  date: { value: string | null; source: "manual" | "episode" | "douban" | null };
+}) {
+  const hint = dateSourceHint(date.source);
+  return (
+    <span>
+      {label} {formatDate(date.value)}
+      {date.value && hint ? (
+        <span className={date.source === "manual" ? "text-primary" : undefined}>
+          （{hint}）
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+/**
+ * 分季卡片：TMDB 的季结构 + 该季的逐集进度、起止时间与评分。
+ * 整块即按钮，点开逐集进度面板——移动端不必瞄准小图标。
+ */
+function SeasonItem({
+  season,
+  workId,
+  seasons,
+  today,
+}: {
+  season: SeasonWithRecord;
+  workId: number;
+  /** 面板里的季切换要用全部季，所以整份传下去 */
+  seasons: PanelSeason[];
+  today: string;
+}) {
   const poster = posterUrl(season.posterPath, "w185");
   const { record } = season;
+  const total = season.episodeCount;
 
   return (
-    <li className="flex gap-4 px-4 py-4">
-      <div className="w-16 shrink-0 overflow-hidden rounded-lg bg-muted ring-1 ring-foreground/10">
-        {poster ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={poster}
-            alt={`${season.name} 海报`}
-            loading="lazy"
-            className="aspect-[2/3] w-full object-cover"
-          />
-        ) : (
-          <div className="flex aspect-[2/3] w-full items-center justify-center text-lg font-semibold text-muted-foreground/50">
-            {season.seasonNumber}
-          </div>
-        )}
-      </div>
+    <li>
+      <SeasonProgressPanel
+        workId={workId}
+        seasons={seasons}
+        initialSeason={season.seasonNumber}
+        today={today}
+        trigger={
+          <button
+            type="button"
+            aria-label={`标记《${season.name}》的观看进度`}
+            className="flex w-full cursor-pointer gap-4 px-4 py-4 text-left transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:outline-none"
+          >
+            <div className="w-16 shrink-0 overflow-hidden rounded-lg bg-muted ring-1 ring-foreground/10">
+              {poster ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={poster}
+                  alt={`${season.name} 海报`}
+                  loading="lazy"
+                  className="aspect-[2/3] w-full object-cover"
+                />
+              ) : (
+                <div className="flex aspect-[2/3] w-full items-center justify-center text-lg font-semibold text-muted-foreground/50">
+                  {season.seasonNumber}
+                </div>
+              )}
+            </div>
 
-      <div className="min-w-0 flex-1 space-y-1.5">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="font-medium">{season.name}</span>
-          {season.voteAverage ? (
-            <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-              <Star className="size-3 fill-primary text-primary" />
-              TMDB {season.voteAverage.toFixed(1)}
-            </span>
-          ) : null}
-        </div>
+            <div className="min-w-0 flex-1 space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-medium">{season.name}</span>
+                {season.completed ? (
+                  <span className="inline-flex h-5 items-center rounded-4xl bg-primary/15 px-2 text-xs font-medium text-primary">
+                    {season.completionSource === "douban" ? "豆瓣已看完" : "已看完"}
+                  </span>
+                ) : season.watchedCount > 0 ? (
+                  <span className="inline-flex h-5 items-center rounded-4xl bg-muted px-2 text-xs font-medium text-muted-foreground">
+                    追剧中
+                  </span>
+                ) : null}
+                {season.voteAverage ? (
+                  <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                    <Star className="size-3 fill-primary text-primary" />
+                    TMDB {season.voteAverage.toFixed(1)}
+                  </span>
+                ) : null}
+              </div>
 
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-          {season.episodeCount > 0 ? <span>共 {season.episodeCount} 集</span> : null}
-          {season.airDate ? <span>{season.airDate} 首播</span> : null}
-        </div>
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                {total > 0 ? (
+                  <span>
+                    已看 {season.watchedCount}/{total} 集
+                  </span>
+                ) : (
+                  <span>已看 {season.watchedCount} 集</span>
+                )}
+                {season.airDate ? <span>{season.airDate} 首播</span> : null}
+              </div>
 
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          {record ? (
-            <>
-              <RatingStars value={record.rating} />
-              <span className="text-muted-foreground">
-                {record.watchedAt ? `${record.watchedAt} 标记` : "未填写标记日期"}
-              </span>
-            </>
-          ) : (
-            <span className="text-muted-foreground">豆瓣无这一季的标记</span>
-          )}
-        </div>
-      </div>
+              {total > 0 ? (
+                <Progress value={(season.watchedCount / total) * 100} />
+              ) : null}
+
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                <SeasonDate label="开始" date={season.startedAt} />
+                <SeasonDate label="看完" date={season.finishedAt} />
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                <span className="flex flex-wrap items-center gap-2">
+                  {record ? (
+                    <>
+                      <RatingStars value={record.rating} />
+                      <span className="text-muted-foreground">
+                        {record.watchedAt
+                          ? `${record.watchedAt} 标记`
+                          : "未填写标记日期"}
+                      </span>
+                    </>
+                  ) : (
+                    <span className="text-muted-foreground">豆瓣无这一季的标记</span>
+                  )}
+                </span>
+                <span className="inline-flex items-center gap-1 font-medium text-primary">
+                  <ListChecks className="size-3.5" />
+                  标记进度
+                </span>
+              </div>
+            </div>
+          </button>
+        }
+      />
     </li>
   );
 }
@@ -239,21 +327,25 @@ export default async function WorkDetailPage({
   const detail = getWorkDetail(Number(id));
   if (!detail) notFound();
 
-  const { work: item, records, tags, seasons } = detail;
+  const { work: item, records, tags, seasons, progress } = detail;
   const platforms = listPlatforms();
   const defaultPlatform = getDefaultPlatform();
   const allTags = listTags();
   const isTv = item.mediaType === "tv";
 
   const latest = latestRecord(records);
-  const progress = latest
-    ? progressLabel({
-        mediaType: item.mediaType,
-        progressSeason: latest.progressSeason,
-        progressEpisode: latest.progressEpisode,
-        episodesWatched: latest.episodesWatched,
-      })
-    : null;
+  // 整剧进度优先看逐集数据：它比 progressSeason/episodesWatched 这类手填列准
+  const progressText = progress ? showProgressLabel(progress) : null;
+  // 面板里的季切换、日期默认值都在客户端用，这里把服务端数据裁成纯值再下传
+  const today = todayIso();
+  const panelSeasons: PanelSeason[] = seasons.map((season) => ({
+    seasonNumber: season.seasonNumber,
+    name: season.name,
+    episodeCount: season.episodeCount,
+    watchedEpisodes: season.watchedEpisodes,
+    completed: season.completed,
+    completionSource: season.completionSource,
+  }));
 
   const genres = parseStringList(item.genres);
   const countries = parseStringList(item.countries);
@@ -362,7 +454,9 @@ export default async function WorkDetailPage({
                 {item.releaseDate} 首播
               </span>
             ) : null}
-            {progress ? <span className="text-primary">{progress}</span> : null}
+            {progressText ? (
+              <span className="text-primary">{progressText}</span>
+            ) : null}
           </div>
 
           <div className="space-y-2 border-t border-border/60 pt-4">
@@ -421,7 +515,13 @@ export default async function WorkDetailPage({
 
           <ul className="divide-y divide-border/60 overflow-hidden rounded-xl bg-card ring-1 ring-foreground/10">
             {seasons.map((season) => (
-              <SeasonItem key={season.seasonNumber} season={season} />
+              <SeasonItem
+                key={season.seasonNumber}
+                season={season}
+                workId={item.id}
+                seasons={panelSeasons}
+                today={today}
+              />
             ))}
           </ul>
         </section>

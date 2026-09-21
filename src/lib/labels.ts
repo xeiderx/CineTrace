@@ -88,6 +88,47 @@ export function viewStatusTone(value: string): string {
   return VIEW_STATUS_TONES[value as ViewStatus] ?? "bg-muted text-muted-foreground";
 }
 
+/**
+ * 可以被「手动锁定」的观影流水字段。
+ *
+ * 只收录豆瓣同步会写入的字段：手动改过这些字段后，下次同步不再用豆瓣的值覆盖
+ * （落在 `view_record.manual_fields_json` 上）。平台、刷次这类同步不碰的字段
+ * 没必要锁，锁了只会让界面多出一堆无意义的标记。
+ */
+export type ViewRecordField =
+  | "status"
+  | "watchedAt"
+  | "startedAt"
+  | "finishedAt"
+  | "rating"
+  | "comment"
+  | "progressSeason";
+
+export const VIEW_RECORD_FIELDS: ViewRecordField[] = [
+  "status",
+  "watchedAt",
+  "startedAt",
+  "finishedAt",
+  "rating",
+  "comment",
+  "progressSeason",
+];
+
+export const VIEW_RECORD_FIELD_LABELS: Record<ViewRecordField, string> = {
+  status: "观看状态",
+  watchedAt: "标记日期",
+  startedAt: "开始观看",
+  finishedAt: "看完日期",
+  rating: "评分",
+  comment: "短评",
+  progressSeason: "归属季",
+};
+
+/** 锁定字段的展示文案。库里存的是字段名，界面要显示中文 */
+export function viewRecordFieldLabel(field: string): string {
+  return VIEW_RECORD_FIELD_LABELS[field as ViewRecordField] ?? field;
+}
+
 /** ISO 日期（YYYY-MM-DD）转展示文本，null 显示占位符 */
 export function formatDate(value: string | null | undefined, fallback = "—"): string {
   return value?.trim() ? value : fallback;

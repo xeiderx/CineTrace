@@ -48,6 +48,7 @@ export async function importBackupAction(
     const summary = [
       `作品 ${stats.works}`,
       `观影记录 ${stats.viewRecords}`,
+      `逐集进度 ${stats.viewEpisodes}`,
       `平台 ${stats.platforms}`,
       `标签 ${stats.tags}`,
       `片单 ${stats.collections}`,

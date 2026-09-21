@@ -5,12 +5,12 @@ import { deleteWorkInListAction } from "@/app/actions/library";
 import { ConfirmDeleteButton } from "@/components/library/confirm-delete-button";
 import { LibraryFilters } from "@/components/library/library-filters";
 import { LibraryPagination } from "@/components/library/library-pagination";
+import { NextEpisodeButton } from "@/components/library/next-episode-button";
 import { WorkSearchCreateDialog } from "@/components/library/work-search-create-dialog";
 import {
   RatingStars,
   WorkMetaBadges,
   WorkPoster,
-  progressLabel,
 } from "@/components/library/work-card";
 import { EmptyState } from "@/components/layout/empty-state";
 import { PageHeader } from "@/components/layout/page-header";
@@ -22,6 +22,7 @@ import {
   listWorksPage,
   type WorkFilters,
 } from "@/lib/queries";
+import { nextEpisodeTarget, showProgressLabel } from "@/lib/watch-progress";
 
 export const metadata: Metadata = { title: "档案库" };
 
@@ -111,19 +112,23 @@ export default async function LibraryPage({
               所以这里不设 3 列档——多一档就会在末行留出空位 */}
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 xl:grid-cols-5">
             {result.items.map((item) => {
-              const progress = progressLabel({
-                mediaType: item.mediaType,
-                progressSeason: item.progressSeason,
-                progressEpisode: item.progressEpisode,
-                episodesWatched: item.episodesWatched,
-              });
+              // 进度文案优先用逐集记录派生的结果，它比手填列算得准
+              const progress = item.progress
+                ? showProgressLabel(item.progress)
+                : null;
+              const nextEpisode = item.progress
+                ? nextEpisodeTarget(item.progress)
+                : null;
               return (
-                // 删除按钮与链接是兄弟节点而非嵌套：按钮放进 <Link> 内部时，
-                // 点它会连带触发跳转，键盘与读屏也会把它当成链接的一部分。
-                <div key={item.id} className="group relative">
+                // 删除、标记下一集这两个按钮与链接是兄弟节点而非嵌套：
+                // 按钮放进 <Link> 内部时，点它会连带触发跳转，
+                // 键盘与读屏也会把它当成链接的一部分。
+                // 容器拉成纵向 flex，快捷按钮就能贴住卡片底部，
+                // 同一行里各张卡片的按钮才对得齐。
+                <div key={item.id} className="group relative flex flex-col gap-2">
                   <Link
                     href={`/library/${item.id}`}
-                    className="block space-y-2.5 rounded-xl outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                    className="block flex-1 space-y-2.5 rounded-xl outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
                   >
                     <div className="relative overflow-hidden rounded-lg ring-1 ring-foreground/10">
                       <WorkPoster title={item.title} posterPath={item.posterPath} />
@@ -164,6 +169,26 @@ export default async function LibraryPage({
                       ) : null}
                     </div>
                   </Link>
+
+                  {/* 正在追的剧给一个「标记下一集」的快捷入口，不必进详情页开面板。
+                      只标一集、日期取今天，要挑日期或跳集仍去详情页的分季面板。 */}
+                  {nextEpisode ? (
+                    <div className="flex items-center gap-2">
+                      <NextEpisodeButton
+                        workId={item.id}
+                        seasonNumber={nextEpisode.seasonNumber}
+                        episodeNumber={nextEpisode.episodeNumber}
+                        completesSeason={nextEpisode.completesSeason}
+                        nextSeasonName={nextEpisode.nextSeasonName}
+                        label={item.title}
+                      />
+                      {item.progress && item.progress.seasons.length > 1 ? (
+                        <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                          {nextEpisode.seasonName}
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : null}
 
                   {/* 桌面端悬停才现身，避免整屏卡片挂满垃圾桶；触屏没有 hover，
                       用 group-focus-within 让键盘也能到达，并始终保留可点区域 */}

@@ -1,8 +1,9 @@
 import { and, eq, isNull } from "drizzle-orm";
 import { db } from "@/db";
-import { syncIssue, viewRecord, work, type NewWork } from "@/db/schema";
+import { syncIssue, viewEpisode, viewRecord, work, type NewWork } from "@/db/schema";
 import { getSetting, setSetting } from "@/lib/settings";
 import { VIEW_STATUS_LABELS, type ViewStatus } from "@/lib/labels";
+import { parseManualFields } from "@/lib/watch-progress";
 import { archiveRaw } from "@/lib/douban/archive";
 import { isBlocked, needsLogin, req } from "@/lib/douban/client";
 import { PARSER_VERSION, parseHasNext, parseListPage, parseListTotal, type ListPageItem } from "@/lib/douban/parse";
@@ -196,10 +197,21 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
     // 就不该因为这一条本地处理失败而被当成「已移除」
     seenSourceKeys.add(sourceKey);
     const existingRecord = db
-      .select({ id: viewRecord.id, workId: viewRecord.workId, watchedAt: viewRecord.watchedAt })
+      .select({
+        id: viewRecord.id,
+        workId: viewRecord.workId,
+        status: viewRecord.status,
+        watchedAt: viewRecord.watchedAt,
+        manualFieldsJson: viewRecord.manualFieldsJson,
+      })
       .from(viewRecord)
       .where(eq(viewRecord.sourceKey, sourceKey))
       .get();
+
+    // 用户在详情页手动改过的字段以本地为准，本轮同步不覆盖它们。
+    // 想重新跟随豆瓣的，在详情页点「恢复跟随豆瓣」把字段解锁即可。
+    const locked = new Set(parseManualFields(existingRecord?.manualFieldsJson));
+    const unlocked = (field: string) => !locked.has(field);
 
     // 条目当前指向的作品：优先记录上挂着的 work，其次按豆瓣 id 直接找。
     // 多季条目只有「代表季」的 id 落在 work.doubanId 上，其余靠记录关联。
@@ -217,27 +229,45 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
     }
 
     const season = resolveProgressSeason(titleCn, workId);
+    // 状态被锁定时以本地为准：用户把某条改成「弃剧」后，不该因为豆瓣还在 collect 列表
+    // 就被改回「看过」。锁定之外的情况仍跟豆瓣走。
+    const finalStatus = unlocked("status") ? status : existingRecord?.status ?? status;
     // 豆瓣三个列表互斥，把「看过」改成「想看」时条目会离开 collect 列表。
     // 状态跟豆瓣走，但原有的看过日期不能被这次改动抹掉——那是真实看过的时间，
     // 以后二刷三刷还要靠它回溯。所以非「看过」的列表只在记录还没有日期时才写入。
-    const keepWatchedAt = status !== "watched" && existingRecord?.watchedAt != null;
+    const keepWatchedAt = finalStatus !== "watched" && existingRecord?.watchedAt != null;
     const values = {
       workId,
       source: "douban",
       sourceItemId: doubanId,
-      status,
-      // 「在看」页的日期是「开始看」，写 startedAt 才不会被概览时间线当成看完
-      ...(status === "watching"
-        ? { startedAt: item.markedAt }
-        : keepWatchedAt
+      status: finalStatus,
+      // 「在看」页的日期是「开始看」，写 startedAt 才不会被概览时间线当成看完；
+      // 「看过」页的日期既是标记日也是看完日，额外落到 finishedAt，
+      // 详情页的季结束时间才有来源（逐集记录缺失时靠它兜底）。
+      ...(finalStatus === "watching"
+        ? unlocked("startedAt")
+          ? { startedAt: item.markedAt }
+          : {}
+        : keepWatchedAt || !unlocked("watchedAt")
           ? {}
           : { watchedAt: item.markedAt }),
-      // 想看/在看页没有评分，null 不能拿去覆盖用户已有的评分
-      ...(status === "watched" || item.rating !== null ? { rating: item.rating } : {}),
-      ...(item.comment !== null ? { comment: item.comment } : {}),
+      // 条目落在「看过」列表时，豆瓣那个标记日同时也是看完日。
+      // 判据用豆瓣的列表归属（status）而不是生效状态：状态被锁成别的值时，
+      // 这一条仍然是豆瓣给出的「已看完」事实，看完日期照旧可信。
+      ...(status === "watched" && unlocked("finishedAt")
+        ? { finishedAt: item.markedAt }
+        : {}),
+      // 想看/在看页没有评分与短评，null 不能拿去覆盖用户已有的值；
+      // 「看过」列表才代表豆瓣给出的权威值，但用户手动改过时仍以本地为准。
+      ...(unlocked("rating") && (status === "watched" || item.rating !== null)
+        ? { rating: item.rating }
+        : {}),
+      ...(unlocked("comment") && (status === "watched" || item.comment !== null)
+        ? { comment: item.comment }
+        : {}),
       // 豆瓣一季一条记录，季号落在记录上，详情页据此按季展示；
       // 标题里没有季标识的条目不写，避免覆盖手工填的进度
-      ...(season !== null ? { progressSeason: season } : {}),
+      ...(unlocked("progressSeason") && season !== null ? { progressSeason: season } : {}),
       // 条目重新出现在列表上，之前打的「已移除」标记必须撤掉
       doubanRemovedAt: null,
     };
@@ -631,6 +661,24 @@ async function resolveWork(item: ListPageItem, issue: IssueReporter): Promise<nu
       // 把它的观影记录改挂到归并后的作品上再删除，避免同一部剧出现两条
       if (byDouban && byDouban.id !== existing.id) {
         db.update(viewRecord).set({ workId: existing.id }).where(eq(viewRecord.workId, byDouban.id)).run();
+        // 逐集记录也是 cascade，但 (workId, watchIndex, seasonNumber, episodeNumber)
+        // 上有唯一索引，直接改 workId 会撞上目标行；先复制，再让删源带走原件。
+        const episodes = db
+          .select({
+            watchIndex: viewEpisode.watchIndex,
+            seasonNumber: viewEpisode.seasonNumber,
+            episodeNumber: viewEpisode.episodeNumber,
+            watchedAt: viewEpisode.watchedAt,
+          })
+          .from(viewEpisode)
+          .where(eq(viewEpisode.workId, byDouban.id))
+          .all();
+        for (const episode of episodes) {
+          db.insert(viewEpisode)
+            .values({ ...episode, workId: existing.id })
+            .onConflictDoNothing()
+            .run();
+        }
         db.delete(work).where(eq(work.id, byDouban.id)).run();
       }
       return existing.id;

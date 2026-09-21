@@ -7,6 +7,7 @@ import {
   setting,
   tag,
   user,
+  viewEpisode,
   viewRecord,
   work,
   workTag,
@@ -60,6 +61,24 @@ export type BackupViewRecord = {
   episodesWatched: number | null;
   /** 「豆瓣已移除」标记时间，ISO 字符串。老备份文件没有这个字段，按未标记处理 */
   doubanRemovedAt: string | null;
+  /**
+   * 被手动改过、不再跟随豆瓣同步的字段名（JSON 数组文本）。
+   * 老备份文件没有这个字段，按「无锁定」处理，导入后同步会重新接管全部字段。
+   */
+  manualFieldsJson: string | null;
+};
+
+/**
+ * 逐集观看明细。`workId` 在库里是 notNull + cascade，
+ * 所以这里用 `workKey` 承载作品引用，解析不到就跳过该行（不造孤儿记录）。
+ */
+export type BackupViewEpisode = {
+  workKey: string;
+  watchIndex: number;
+  seasonNumber: number;
+  episodeNumber: number;
+  /** 该集观看日期，ISO 文本（YYYY-MM-DD） */
+  watchedAt: string | null;
 };
 
 export type BackupFile = {
@@ -74,6 +93,7 @@ export type BackupFile = {
     tags: { name: string; color: string | null }[];
     works: BackupWork[];
     viewRecords: BackupViewRecord[];
+    viewEpisodes: BackupViewEpisode[];
     workTags: { workKey: string; tagName: string }[];
     collections: { name: string; description: string | null; coverPath: string | null; sortOrder: number }[];
     collectionItems: { collectionName: string; workKey: string; sortOrder: number; note: string | null }[];
@@ -87,6 +107,7 @@ export type ImportStats = {
   tags: number;
   works: number;
   viewRecords: number;
+  viewEpisodes: number;
   workTags: number;
   collections: number;
   collectionItems: number;
@@ -188,7 +209,25 @@ export function exportBackup(): BackupFile {
       progressEpisode: row.progressEpisode,
       episodesWatched: row.episodesWatched,
       doubanRemovedAt: row.doubanRemovedAt?.toISOString() ?? null,
+      manualFieldsJson: row.manualFieldsJson,
     }));
+
+  /*
+   * 逐集明细：作品的 notNull 外键换成语义化的 workKey。
+   * 取不到键（理论上不会发生）就丢掉该行，宁可少备份也不要留下无法归属的记录。
+   */
+  const viewEpisodes: BackupViewEpisode[] = db
+    .select()
+    .from(viewEpisode)
+    .all()
+    .map((row) => ({
+      workKey: workIdToKey.get(row.workId) ?? "",
+      watchIndex: row.watchIndex,
+      seasonNumber: row.seasonNumber,
+      episodeNumber: row.episodeNumber,
+      watchedAt: row.watchedAt,
+    }))
+    .filter((row) => row.workKey);
 
   const workTags = db
     .select({ workId: workTag.workId, tagId: workTag.tagId })
@@ -234,6 +273,7 @@ export function exportBackup(): BackupFile {
       tags: db.select({ name: tag.name, color: tag.color }).from(tag).all(),
       works,
       viewRecords,
+      viewEpisodes,
       workTags,
       collections: db
         .select({
@@ -283,6 +323,7 @@ export function parseBackupFile(raw: string): BackupFile {
       tags: data.tags ?? [],
       works: data.works,
       viewRecords: data.viewRecords,
+      viewEpisodes: data.viewEpisodes ?? [],
       workTags: data.workTags ?? [],
       collections: data.collections ?? [],
       collectionItems: data.collectionItems ?? [],
@@ -303,6 +344,7 @@ export function importBackup(file: BackupFile): ImportStats {
     tags: 0,
     works: 0,
     viewRecords: 0,
+    viewEpisodes: 0,
     workTags: 0,
     collections: 0,
     collectionItems: 0,
@@ -490,12 +532,46 @@ export function importBackup(file: BackupFile): ImportStats {
         episodesWatched: row.episodesWatched ?? null,
         // 老备份文件没有这个字段：按未标记处理，不会凭空造出「豆瓣已移除」
         doubanRemovedAt: parseBackupDate(row.doubanRemovedAt),
+        // 该列 notNull，缺省补空数组：老备份导入后同步会重新接管全部字段
+        manualFieldsJson: typeof row.manualFieldsJson === "string" && row.manualFieldsJson.trim()
+          ? row.manualFieldsJson
+          : "[]",
       };
       tx.insert(viewRecord)
         .values({ ...values, sourceKey: row.sourceKey })
         .onConflictDoUpdate({ target: viewRecord.sourceKey, set: { ...values, updatedAt: new Date() } })
         .run();
       stats.viewRecords += 1;
+    }
+
+    /*
+     * 逐集明细：唯一键是 (workId, watchIndex, seasonNumber, episodeNumber)，
+     * 重复导入同一份文件走 upsert 而非插重。
+     * workKey 解析不到对应作品时跳过——workId 不能为空，造不出合法行。
+     */
+    for (const row of d.viewEpisodes) {
+      if (!row?.workKey) continue;
+      const workId = workIdByKey.get(row.workKey);
+      if (!workId) continue;
+      const seasonNumber = row.seasonNumber;
+      const episodeNumber = row.episodeNumber;
+      // 季/集号是必填的定位信息，缺失或非数字的脏数据直接丢弃
+      if (!Number.isInteger(seasonNumber) || !Number.isInteger(episodeNumber)) continue;
+      const watchIndex = Number.isInteger(row.watchIndex) ? row.watchIndex : 1;
+      const values = { watchedAt: row.watchedAt ?? null };
+      tx.insert(viewEpisode)
+        .values({ workId, watchIndex, seasonNumber, episodeNumber, ...values })
+        .onConflictDoUpdate({
+          target: [
+            viewEpisode.workId,
+            viewEpisode.watchIndex,
+            viewEpisode.seasonNumber,
+            viewEpisode.episodeNumber,
+          ],
+          set: { ...values, updatedAt: new Date() },
+        })
+        .run();
+      stats.viewEpisodes += 1;
     }
 
     /* 关联表：复合主键即幂等手段 */

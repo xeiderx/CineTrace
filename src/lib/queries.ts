@@ -17,6 +17,7 @@ import { db } from "@/db";
 import {
   platform,
   tag,
+  viewEpisode,
   viewRecord,
   work,
   workTag,
@@ -27,6 +28,13 @@ import {
 } from "@/db/schema";
 import { pendingMetadataWhere } from "@/lib/backup";
 import { DOUBAN_REMOVED_FILTER, PENDING_METADATA_FILTER } from "@/lib/labels";
+import {
+  buildShowProgress,
+  type EpisodeMark,
+  type ProgressRecordInput,
+  type SeasonStats,
+  type ShowProgress,
+} from "@/lib/watch-progress";
 
 /* -------------------------------------------------------------------------- */
 /*                                  展示辅助                                    */
@@ -102,6 +110,65 @@ export function tagUsage(): Record<number, number> {
 }
 
 /* -------------------------------------------------------------------------- */
+/*                                  追剧进度                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * 批量取逐集记录并按作品分组。
+ *
+ * 列表页与详情页共用：一次把要展示的作品的逐集记录全查出来，
+ * 避免每部作品各查一次（列表一页 20 部就是 20 条查询）。
+ */
+function episodeMarksByWork(workIds: number[]): Map<number, EpisodeMark[]> {
+  const grouped = new Map<number, EpisodeMark[]>();
+  if (workIds.length === 0) return grouped;
+
+  const rows = db
+    .select({
+      workId: viewEpisode.workId,
+      seasonNumber: viewEpisode.seasonNumber,
+      episodeNumber: viewEpisode.episodeNumber,
+      watchedAt: viewEpisode.watchedAt,
+    })
+    .from(viewEpisode)
+    .where(inArray(viewEpisode.workId, workIds))
+    .all();
+
+  for (const row of rows) {
+    const mark: EpisodeMark = {
+      seasonNumber: row.seasonNumber,
+      episodeNumber: row.episodeNumber,
+      watchedAt: row.watchedAt,
+    };
+    const bucket = grouped.get(row.workId);
+    if (bucket) bucket.push(mark);
+    else grouped.set(row.workId, [mark]);
+  }
+  return grouped;
+}
+
+/**
+ * 一部作品的追剧进度。规则全部在 `lib/watch-progress.ts`，这里只负责把
+ * 数据库的行喂进去。电影返回 null——没有分季结构，集数进度也无意义。
+ *
+ * 逐集记录不分刷次：进度回答的是「这部剧我看过哪些集」，重刷不会让进度倒退。
+ * 真要按刷次分开算，得上 `view_episode.watchIndex`，那是另一回事。
+ */
+function buildProgress(
+  item: Pick<Work, "mediaType" | "seasonsJson" | "episodeCount">,
+  records: ProgressRecordInput[],
+  episodes: EpisodeMark[],
+): ShowProgress | null {
+  if (item.mediaType !== "tv") return null;
+  return buildShowProgress({
+    seasons: parseSeasons(item.seasonsJson),
+    episodes,
+    records,
+    episodeCount: item.episodeCount,
+  });
+}
+
+/* -------------------------------------------------------------------------- */
 /*                                  档案库列表                                  */
 /* -------------------------------------------------------------------------- */
 
@@ -170,6 +237,17 @@ export type WorkListItem = Work & {
   progressSeason: number | null;
   progressEpisode: number | null;
   episodesWatched: number | null;
+  /**
+   * 逐集记录里最近一次观看的日期。
+   * 它比 `lastWatchedAt` 更贴近「最近追到哪」——逐集标记是当场点出来的，
+   * 而豆瓣流水可能几周都没同步过。没有逐集记录时为 null。
+   */
+  lastEpisodeAt: string | null;
+  /**
+   * 由逐集记录派生的追剧进度，电影为 null。
+   * 卡片的进度文案优先用它，它比上面三个手填列更准（能算出 x/N 集与季数）。
+   */
+  progress: ShowProgress | null;
   /** 名下带有「豆瓣已移除」标记的记录条数 */
   removedCount: number;
   tags: Tag[];
@@ -190,6 +268,17 @@ export function latestRecord<T extends { watchedAt: string | null; id: number }>
 
 function pickLatest(records: ViewRecord[]): ViewRecord | null {
   return latestRecord(records);
+}
+
+/** 逐集记录里最近的标记日期。ISO 文本按字典序比较即等价于按时间比较 */
+function latestEpisodeDate(marks: EpisodeMark[]): string | null {
+  let best: string | null = null;
+  for (const mark of marks) {
+    const value = mark.watchedAt?.trim();
+    if (!value) continue;
+    if (best === null || value > best) best = value;
+  }
+  return best;
 }
 
 /**
@@ -265,6 +354,8 @@ export function listWorks(filters: WorkFilters = {}): WorkListItem[] {
     .where(inArray(viewRecord.workId, workIds))
     .all();
 
+  const episodesByWork = episodeMarksByWork(workIds);
+
   const tagRows = db
     .select({ workId: workTag.workId, tag: tag })
     .from(workTag)
@@ -290,6 +381,7 @@ export function listWorks(filters: WorkFilters = {}): WorkListItem[] {
   const items: WorkListItem[] = works.map((w) => {
     const own = recordsByWork.get(w.id) ?? [];
     const latest = pickLatest(own);
+    const marks = episodesByWork.get(w.id) ?? [];
     return {
       ...w,
       viewCount: own.length,
@@ -301,6 +393,8 @@ export function listWorks(filters: WorkFilters = {}): WorkListItem[] {
       progressSeason: latest?.progressSeason ?? null,
       progressEpisode: latest?.progressEpisode ?? null,
       episodesWatched: latest?.episodesWatched ?? null,
+      lastEpisodeAt: latestEpisodeDate(marks),
+      progress: buildProgress(w, own, marks),
       removedCount: own.filter((r) => r.doubanRemovedAt != null).length,
       tags: tagsByWork.get(w.id) ?? [],
     };
@@ -413,17 +507,19 @@ export type WorkSeason = {
   voteAverage: number | null;
 };
 
-/** 分季结构 + 该季在豆瓣的标记（星级 / 标记时间），没有标记时为 null。 */
-export type SeasonWithRecord = WorkSeason & {
-  record: ViewRecord | null;
-};
+/** 分季结构 + 逐集派生出的该季进度（含该季豆瓣标记与评分）。 */
+export type SeasonWithRecord = SeasonStats;
 
 export type WorkDetail = {
   work: Work;
   records: ViewRecordWithPlatform[];
   tags: Tag[];
-  /** 仅剧集非空；已按季号与观影记录合并 */
+  /** 仅剧集非空；已按季号与观影记录、逐集记录合并 */
   seasons: SeasonWithRecord[];
+  /** 整剧追剧进度；电影或没有分季结构时为 null */
+  progress: ShowProgress | null;
+  /** 全部逐集记录，按季号、集号升序。进度面板据此渲染集号网格 */
+  episodes: EpisodeMark[];
 };
 
 /** 解析 seasonsJson。任何异常一律当空数组，坏数据不该让页面挂掉。 */
@@ -444,33 +540,25 @@ export function parseSeasons(json: string | null | undefined): WorkSeason[] {
 }
 
 /**
- * 把 TMDB 的季结构与豆瓣标记按季号对齐。
- * 豆瓣一季一条观影记录，季号记在 progressSeason 上；同一季有多条时取最近一条。
+ * 把 TMDB 的季结构与豆瓣标记、逐集记录对齐，算出每一季的进度与起止时间。
+ *
+ * 真正的规则在 `lib/watch-progress.ts` 的 `buildShowProgress`：豆瓣「看过」的
+ * 补齐、`progressEpisode` 的兜底展开、季完成判定都在那边，这里只做取数。
  */
-function mergeSeasons(work: Work, records: ViewRecord[]): SeasonWithRecord[] {
-  const seasons = parseSeasons(work.seasonsJson);
+function mergeSeasons(
+  item: Pick<Work, "seasonsJson" | "episodeCount">,
+  records: ProgressRecordInput[],
+  episodes: EpisodeMark[],
+): SeasonWithRecord[] {
+  const seasons = parseSeasons(item.seasonsJson);
   if (seasons.length === 0) return [];
 
-  const bySeason = new Map<number, ViewRecord[]>();
-  for (const record of records) {
-    if (record.progressSeason == null) continue;
-    const bucket = bySeason.get(record.progressSeason);
-    if (bucket) bucket.push(record);
-    else bySeason.set(record.progressSeason, [record]);
-  }
-
-  const merged = seasons.map((season) => ({
-    ...season,
-    record: latestRecord(bySeason.get(season.seasonNumber) ?? []),
-  }));
-
-  // 只有一季的剧，豆瓣标题通常不带「第X季」，记录上就没有季号；
-  // 此时直接把记录归到唯一那一季，否则标记时间会无处显示。
-  if (merged.length === 1 && merged[0].record === null && bySeason.size === 0) {
-    merged[0].record = latestRecord(records);
-  }
-
-  return merged;
+  return buildShowProgress({
+    seasons,
+    episodes,
+    records,
+    episodeCount: item.episodeCount,
+  }).seasons;
 }
 
 export function getWorkDetail(workId: number): WorkDetail | null {
@@ -504,7 +592,16 @@ export function getWorkDetail(workId: number): WorkDetail | null {
     .all()
     .map((r) => r.tag);
 
-  return { work: row, records, tags, seasons: mergeSeasons(row, records) };
+  const episodes = episodeMarksByWork([workId]).get(workId) ?? [];
+
+  return {
+    work: row,
+    records,
+    tags,
+    seasons: mergeSeasons(row, records, episodes),
+    progress: buildProgress(row, records, episodes),
+    episodes,
+  };
 }
 
 /* -------------------------------------------------------------------------- */

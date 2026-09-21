@@ -1,5 +1,6 @@
 import {
   BarChart3,
+  CirclePlay,
   Compass,
   LayoutDashboard,
   Library,
@@ -22,13 +23,18 @@ export type NavItem = {
 export const NAV_ITEMS: NavItem[] = [
   { href: "/", label: "概览", icon: LayoutDashboard },
   { href: "/library", label: "档案库", icon: Library },
+  { href: "/watching", label: "追剧", icon: CirclePlay },
   { href: "/collections", label: "片单", icon: ListVideo },
   { href: "/stats", label: "统计", icon: BarChart3 },
   { href: "/discover", label: "发现", icon: Compass },
 ];
 
-/** 桌面端侧边栏额外的次级入口 */
+/**
+ * 桌面端侧边栏额外的次级入口。
+ * 移动端底部只有 5 格，追剧要常驻，片单频次低，因此片单落到这里。
+ */
 export const SECONDARY_NAV_ITEMS: NavItem[] = [
+  { href: "/collections", label: "片单", icon: ListVideo },
   { href: "/settings", label: "设置", icon: Settings },
 ];
 
@@ -36,7 +42,7 @@ export const SECONDARY_NAV_ITEMS: NavItem[] = [
 export const MOBILE_NAV_ITEMS: NavItem[] = [
   { href: "/", label: "概览", icon: LayoutDashboard },
   { href: "/library", label: "档案库", icon: Library },
-  { href: "/collections", label: "片单", icon: ListVideo },
+  { href: "/watching", label: "追剧", icon: CirclePlay },
   { href: "/stats", label: "统计", icon: BarChart3 },
   { href: "/settings", label: "设置", icon: Settings },
 ];

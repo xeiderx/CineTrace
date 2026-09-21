@@ -5,9 +5,32 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { collectionItem, person, platform, tag, viewRecord, work, workTag, type Person } from "@/db/schema";
-import { getDefaultPlatform, listWorksByCastId, posterUrl } from "@/lib/queries";
-import { mergeCast, parseCast } from "@/lib/labels";
+import {
+  collectionItem,
+  person,
+  platform,
+  tag,
+  viewEpisode,
+  viewRecord,
+  work,
+  workTag,
+  type Person,
+  type ViewRecord,
+} from "@/db/schema";
+import {
+  getDefaultPlatform,
+  listWorksByCastId,
+  parseSeasons,
+  posterUrl,
+} from "@/lib/queries";
+import {
+  VIEW_RECORD_FIELD_LABELS,
+  VIEW_RECORD_FIELDS,
+  mergeCast,
+  parseCast,
+  type ViewRecordField,
+} from "@/lib/labels";
+import { parseManualFields, todayIso } from "@/lib/watch-progress";
 import {
   hasTmdbKey,
   searchTmdb,
@@ -16,7 +39,7 @@ import {
   type TmdbDetail,
 } from "@/lib/tmdb";
 
-export type FormState = { error?: string; ok?: boolean } | undefined;
+export type FormState = { error?: string; ok?: boolean; message?: string } | undefined;
 
 /* -------------------------------------------------------------------------- */
 /*                                    工具                                      */
@@ -55,7 +78,81 @@ function list(formData: FormData, key: string): string[] {
 function refreshLibrary(workId?: number) {
   revalidatePath("/");
   revalidatePath("/library");
+  // 逐集标记会改变「追剧」页的在看列表与进度，一并刷新
+  revalidatePath("/watching");
   if (workId != null) revalidatePath(`/library/${workId}`);
+}
+
+/* ------------------------------- 手动锁定字段 ------------------------------- */
+
+/**
+ * 参与锁定判断的字段值。
+ *
+ * 类型按各列的真实类型写：如果统一放宽成 `string | number | null`，
+ * `status` 就只剩这个宽类型，没法直接交给 drizzle 的 `set()`。
+ * 各键齐全，因此仍可用 `ViewRecordField` 联合键去索引。
+ */
+type ViewRecordFieldValues = {
+  status: string;
+  watchedAt: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  rating: number | null;
+  comment: string | null;
+  progressSeason: number | null;
+};
+
+/** 归一化比较：数字列与文本列都按字符串比，避免 3 与 "3" 被判成不同值 */
+function sameValue(a: string | number | null, b: string | number | null): boolean {
+  if (a == null && b == null) return true;
+  if (a == null || b == null) return false;
+  return `${a}` === `${b}`;
+}
+
+/** 找出这次编辑真的改动过的字段——只有这些才该被锁上 */
+function changedFields(
+  before: ViewRecordFieldValues,
+  after: ViewRecordFieldValues,
+): ViewRecordField[] {
+  return VIEW_RECORD_FIELDS.filter((field) => !sameValue(before[field], after[field]));
+}
+
+/** 表单传来的字段名过滤成合法字段，忽略不认识的值 */
+function toViewRecordFields(names: string[]): ViewRecordField[] {
+  return names.filter((name): name is ViewRecordField =>
+    (VIEW_RECORD_FIELDS as string[]).includes(name),
+  );
+}
+
+/** 取出参与锁定判断的字段当前值 */
+function fieldValues(row: ViewRecord): ViewRecordFieldValues {
+  return {
+    status: row.status,
+    watchedAt: row.watchedAt,
+    startedAt: row.startedAt,
+    finishedAt: row.finishedAt,
+    rating: row.rating,
+    comment: row.comment,
+    progressSeason: row.progressSeason,
+  };
+}
+
+/**
+ * 算出这次保存后该有哪些字段被锁定。
+ *
+ * 顺序是有意的：先锁定「这次改动过的」，再移除「用户点名要恢复跟随豆瓣的」。
+ * 两者重叠时以解锁为准——用户既改了值又说要跟随豆瓣，只能理解成
+ * 「改成豆瓣那个值」，所以不该锁。
+ */
+function nextLockedFields(
+  current: string | null,
+  changed: ViewRecordField[],
+  unlocked: ViewRecordField[],
+): string {
+  const locked = new Set(parseManualFields(current));
+  for (const field of changed) locked.add(field);
+  for (const field of unlocked) locked.delete(field);
+  return JSON.stringify([...locked]);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -356,6 +453,25 @@ function mergeWorkInto(sourceId: number, target: { id: number; title: string }):
         .run();
     }
 
+    // 逐集记录也是 cascade，但 `(workId, watchIndex, seasonNumber, episodeNumber)`
+    // 上有唯一索引，直接 update workId 会撞上目标行，只能先复制再让删源带走原件。
+    const episodes = tx
+      .select({
+        watchIndex: viewEpisode.watchIndex,
+        seasonNumber: viewEpisode.seasonNumber,
+        episodeNumber: viewEpisode.episodeNumber,
+        watchedAt: viewEpisode.watchedAt,
+      })
+      .from(viewEpisode)
+      .where(eq(viewEpisode.workId, sourceId))
+      .all();
+    for (const episode of episodes) {
+      tx.insert(viewEpisode)
+        .values({ ...episode, workId: target.id })
+        .onConflictDoNothing()
+        .run();
+    }
+
     tx.delete(work).where(eq(work.id, sourceId)).run();
   });
 
@@ -565,6 +681,38 @@ export async function detachTagAction(formData: FormData): Promise<void> {
 /* -------------------------------------------------------------------------- */
 
 /**
+ * 校验手填的集数是否超过该季实际集数。
+ *
+ * `progressEpisode` / `episodesWatched` 是没有逐集记录时的兜底展示值，
+ * 填超了会把进度条算到 100% 以上，所以按 `work.seasonsJson` 里的集数卡住。
+ * 季号未知（未标记季，或该季不在 TMDB 列表里）时退化为逐集标记的同一个上限，
+ * 只做防呆，不误伤手动补录的老剧。
+ */
+function validateEpisodeProgress(
+  seasonNumber: number | null,
+  progressEpisode: number | null,
+  episodesWatched: number | null,
+  seasonsJson: string | null | undefined,
+): string | null {
+  const season =
+    seasonNumber == null
+      ? null
+      : (parseSeasons(seasonsJson).find((s) => s.seasonNumber === seasonNumber) ??
+        null);
+  const cap =
+    season && season.episodeCount > 0 ? season.episodeCount : MAX_BATCH_EPISODES;
+  const seasonLabel = seasonNumber == null ? "该剧" : `第 ${seasonNumber} 季`;
+
+  if (progressEpisode != null && (progressEpisode < 0 || progressEpisode > cap)) {
+    return `${seasonLabel}共 ${cap} 集，集号应在 0–${cap} 之间`;
+  }
+  if (episodesWatched != null && (episodesWatched < 0 || episodesWatched > cap)) {
+    return `${seasonLabel}共 ${cap} 集，累计已看不能超过 ${cap}`;
+  }
+  return null;
+}
+
+/**
  * 新增一条观影流水。同一部作品看第二次即再插一行，
  * watchIndex 递增，天然表达二刷三刷。
  */
@@ -577,6 +725,23 @@ export async function createViewRecordAction(
 
   const status = required(formData, "status") || "watched";
   const watchedAt = text(formData, "watchedAt");
+
+  const progressSeason = int(formData, "progressSeason");
+  const progressEpisode = int(formData, "progressEpisode");
+  const episodesWatched = int(formData, "episodesWatched");
+
+  const workRow = db
+    .select({ seasonsJson: work.seasonsJson })
+    .from(work)
+    .where(eq(work.id, workId))
+    .get();
+  const progressError = validateEpisodeProgress(
+    progressSeason,
+    progressEpisode,
+    episodesWatched,
+    workRow?.seasonsJson,
+  );
+  if (progressError) return { error: progressError };
 
   const maxRow = db
     .select({ value: sql<number>`coalesce(max(${viewRecord.watchIndex}), 0)` })
@@ -598,9 +763,9 @@ export async function createViewRecordAction(
       // 对话框里选择「默认」时不传 platformId，读取时回落到默认平台
       platformId: int(formData, "platformId"),
       watchIndex: (maxRow?.value ?? 0) + 1,
-      progressSeason: int(formData, "progressSeason"),
-      progressEpisode: int(formData, "progressEpisode"),
-      episodesWatched: int(formData, "episodesWatched"),
+      progressSeason,
+      progressEpisode,
+      episodesWatched,
     })
     .run();
 
@@ -618,19 +783,57 @@ export async function updateViewRecordAction(
   const row = db.select().from(viewRecord).where(eq(viewRecord.id, id)).get();
   if (!row) return { error: "记录不存在" };
 
+  const status = required(formData, "status") || "watched";
+
+  // progressSeason 用 NO_SEASON 哨兵表示「未标记」，要靠它把已有的季号清掉，
+  // 所以不能简单套 `?? row.progressSeason`——哨兵要落成 null。
+  // 表单没带这个键（如从别处触发的部分更新）才保留原值。
+  const hasSeasonField = formData.has("progressSeason");
+  const seasonRaw = hasSeasonField ? int(formData, "progressSeason") : row.progressSeason;
+
+  const values: ViewRecordFieldValues = {
+    status,
+    watchedAt: text(formData, "watchedAt"),
+    startedAt: text(formData, "startedAt"),
+    finishedAt: text(formData, "finishedAt"),
+    rating: int(formData, "rating"),
+    comment: text(formData, "comment"),
+    progressSeason: seasonRaw,
+  };
+
+  const changed = changedFields(fieldValues(row), values);
+  const unlocked = toViewRecordFields(formData.getAll("unlockFields").map(String));
+
+  const progressEpisode = formData.has("progressEpisode")
+    ? int(formData, "progressEpisode")
+    : row.progressEpisode;
+  const episodesWatched = formData.has("episodesWatched")
+    ? int(formData, "episodesWatched")
+    : row.episodesWatched;
+
+  const workRow = db
+    .select({ seasonsJson: work.seasonsJson })
+    .from(work)
+    .where(eq(work.id, row.workId ?? 0))
+    .get();
+  const progressError = validateEpisodeProgress(
+    seasonRaw,
+    progressEpisode,
+    episodesWatched,
+    workRow?.seasonsJson,
+  );
+  if (progressError) return { error: progressError };
+
   db.update(viewRecord)
     .set({
-      status: required(formData, "status") || "watched",
-      watchedAt: text(formData, "watchedAt"),
-      startedAt: text(formData, "startedAt"),
-      finishedAt: text(formData, "finishedAt"),
-      rating: int(formData, "rating"),
-      comment: text(formData, "comment"),
+      ...values,
       platformId: int(formData, "platformId"),
       watchIndex: int(formData, "watchIndex") ?? row.watchIndex,
-      progressSeason: int(formData, "progressSeason"),
-      progressEpisode: int(formData, "progressEpisode"),
-      episodesWatched: int(formData, "episodesWatched"),
+      // 集数进度是逐集标记落地前的兜底展示值，缺值就保留原样；
+      // 0 是合法值（表示「一集没看」），所以只在键不存在时才兜底。
+      progressEpisode,
+      episodesWatched,
+      manualFieldsJson: nextLockedFields(row.manualFieldsJson, changed, unlocked),
     })
     .where(eq(viewRecord.id, id))
     .run();
@@ -664,6 +867,220 @@ export async function rebindViewRecordAction(formData: FormData): Promise<void> 
 
   refreshLibrary(row?.workId ?? undefined);
   refreshLibrary(workId);
+}
+
+/* -------------------------------------------------------------------------- */
+/*                                 逐集进度标记                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * 逐集标记统一落在第 1 刷。
+ *
+ * 进度回答的是「这部剧我看过哪些集」，与刷次无关——`lib/queries.ts` 读逐集记录
+ * 时也不按 watchIndex 过滤。固定写第 1 刷，读写口径才是同一个，不会出现
+ * 「标记时记在第 2 刷、算进度时只看第 1 刷」这种自相矛盾。
+ */
+const PROGRESS_WATCH_INDEX = 1;
+
+/** 一次补齐的集数上限。防呆用，正常剧集远小于这个数 */
+const MAX_BATCH_EPISODES = 1000;
+
+/** 面板上的操作目标：一部作品的某一季 */
+function episodeTarget(
+  formData: FormData,
+): { workId: number; seasonNumber: number } | null {
+  const workId = int(formData, "workId");
+  const seasonNumber = int(formData, "seasonNumber");
+  if (workId == null || seasonNumber == null || seasonNumber < 0) return null;
+  return { workId, seasonNumber };
+}
+
+/**
+ * 把某一季的进度落成「已看第 1..last 集」。
+ *
+ * 这是进度面板的主操作：点集号网格里的第 K 格就是「看到第 K 集」，
+ * 「整季看完」传最后一集，「标记下一集」传 `lastWatched + 1`。
+ * 目标进度之上的集号会被清掉——点第 K 格要的是「就停在这里」，
+ * 留着更大的集号会立刻把进度又顶回去。
+ *
+ * 已存在的记录保留自己的日期，只给这次新补的集号写日期：用户选 9 月 1 日
+ * 去补第 3、4 集，不该把 6 月就标好的第 1、2 集改成 9 月 1 日。
+ */
+function setSeasonProgress(
+  workId: number,
+  seasonNumber: number,
+  last: number,
+  watchedAt: string,
+): void {
+  db.transaction((tx) => {
+    const existing = tx
+      .select({
+        id: viewEpisode.id,
+        episodeNumber: viewEpisode.episodeNumber,
+        watchedAt: viewEpisode.watchedAt,
+      })
+      .from(viewEpisode)
+      .where(
+        and(
+          eq(viewEpisode.workId, workId),
+          eq(viewEpisode.watchIndex, PROGRESS_WATCH_INDEX),
+          eq(viewEpisode.seasonNumber, seasonNumber),
+        ),
+      )
+      .all();
+
+    const byEpisode = new Map(existing.map((row) => [row.episodeNumber, row]));
+
+    for (const row of existing) {
+      if (row.episodeNumber > last) {
+        tx.delete(viewEpisode).where(eq(viewEpisode.id, row.id)).run();
+      }
+    }
+
+    for (let episodeNumber = 1; episodeNumber <= last; episodeNumber += 1) {
+      const row = byEpisode.get(episodeNumber);
+      if (!row) {
+        tx.insert(viewEpisode)
+          .values({
+            workId,
+            watchIndex: PROGRESS_WATCH_INDEX,
+            seasonNumber,
+            episodeNumber,
+            watchedAt,
+          })
+          .run();
+      } else if (row.watchedAt == null) {
+        tx.update(viewEpisode)
+          .set({ watchedAt })
+          .where(eq(viewEpisode.id, row.id))
+          .run();
+      }
+    }
+  });
+}
+
+/**
+ * 把某一季的进度设成「已看第 1..last 集」。`lastEpisode = 0` 即清空这一季。
+ *
+ * 面板没传日期时用今天（`todayIso()` 取本地时区，不用 UTC，
+ * 否则清晨标的会被记到昨天）。
+ */
+export async function setSeasonProgressAction(
+  _prev: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const target = episodeTarget(formData);
+  if (!target) return { error: "缺少作品或季号" };
+
+  const lastEpisode = int(formData, "lastEpisode");
+  if (lastEpisode == null || lastEpisode < 0) return { error: "集号不合法" };
+  if (lastEpisode > MAX_BATCH_EPISODES) {
+    return { error: `一次最多标记 ${MAX_BATCH_EPISODES} 集` };
+  }
+
+  const watchedAt = text(formData, "watchedAt") ?? todayIso();
+
+  setSeasonProgress(target.workId, target.seasonNumber, lastEpisode, watchedAt);
+  refreshLibrary(target.workId);
+  return {
+    ok: true,
+    message:
+      lastEpisode === 0
+        ? `已清空第 ${target.seasonNumber} 季的观看进度`
+        : `第 ${target.seasonNumber} 季已记到第 ${lastEpisode} 集`,
+  };
+}
+
+/** 标记单独某一集。跳着看、补看漏掉的一集走这里，不牵动这一季的其他集 */
+export async function saveEpisodeAction(
+  _prev: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const target = episodeTarget(formData);
+  if (!target) return { error: "缺少作品或季号" };
+
+  const episodeNumber = int(formData, "episodeNumber");
+  if (episodeNumber == null || episodeNumber < 1) return { error: "集号不合法" };
+
+  const watchedAt = text(formData, "watchedAt") ?? todayIso();
+
+  db.insert(viewEpisode)
+    .values({
+      workId: target.workId,
+      watchIndex: PROGRESS_WATCH_INDEX,
+      seasonNumber: target.seasonNumber,
+      episodeNumber,
+      watchedAt,
+    })
+    .onConflictDoUpdate({
+      target: [
+        viewEpisode.workId,
+        viewEpisode.watchIndex,
+        viewEpisode.seasonNumber,
+        viewEpisode.episodeNumber,
+      ],
+      set: { watchedAt },
+    })
+    .run();
+
+  refreshLibrary(target.workId);
+  return {
+    ok: true,
+    message: `第 ${target.seasonNumber} 季第 ${episodeNumber} 集已标记为看过`,
+  };
+}
+
+/** 撤销单独某一集。与 saveEpisodeAction 相对，供集号网格里的「取消这一集」用 */
+export async function removeEpisodeAction(formData: FormData): Promise<void> {
+  const target = episodeTarget(formData);
+  if (!target) return;
+
+  const episodeNumber = int(formData, "episodeNumber");
+  if (episodeNumber == null) return;
+
+  db.delete(viewEpisode)
+    .where(
+      and(
+        eq(viewEpisode.workId, target.workId),
+        eq(viewEpisode.watchIndex, PROGRESS_WATCH_INDEX),
+        eq(viewEpisode.seasonNumber, target.seasonNumber),
+        eq(viewEpisode.episodeNumber, episodeNumber),
+      ),
+    )
+    .run();
+
+  refreshLibrary(target.workId);
+}
+
+/**
+ * 让指定字段重新跟随豆瓣。
+ *
+ * 只把字段名从锁定名单里移除，不立刻去抓豆瓣：同步任务有自己的作息窗口与节流，
+ * 详情页上临时发一次请求既慢又容易触发风控。移除后下一轮同步会重新写入豆瓣的值。
+ */
+export async function unlockViewRecordFieldsAction(
+  _prev: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const id = int(formData, "id");
+  if (id == null) return { error: "缺少记录 ID" };
+
+  const row = db.select().from(viewRecord).where(eq(viewRecord.id, id)).get();
+  if (!row) return { error: "记录不存在" };
+
+  const fields = toViewRecordFields(formData.getAll("fields").map(String));
+  if (fields.length === 0) return { error: "没有指定要恢复的字段" };
+
+  db.update(viewRecord)
+    .set({ manualFieldsJson: nextLockedFields(row.manualFieldsJson, [], fields) })
+    .where(eq(viewRecord.id, id))
+    .run();
+
+  refreshLibrary(row.workId ?? undefined);
+  return {
+    ok: true,
+    message: `已恢复跟随豆瓣：${fields.map((f) => VIEW_RECORD_FIELD_LABELS[f]).join("、")}`,
+  };
 }
 
 /* -------------------------------------------------------------------------- */

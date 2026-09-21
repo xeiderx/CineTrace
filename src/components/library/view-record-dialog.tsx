@@ -2,8 +2,10 @@
 
 import { useActionState, useState } from "react";
 import { Plus, Pencil } from "lucide-react";
+import { toast } from "sonner";
 import {
   createViewRecordAction,
+  unlockViewRecordFieldsAction,
   updateViewRecordAction,
   type FormState,
 } from "@/app/actions/library";
@@ -27,7 +29,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { VIEW_STATUS_LABELS, VIEW_STATUS_ORDER } from "@/lib/labels";
+import {
+  VIEW_STATUS_LABELS,
+  VIEW_STATUS_ORDER,
+  viewRecordFieldLabel,
+} from "@/lib/labels";
+import { parseManualFields } from "@/lib/watch-progress";
 import type { Platform, ViewRecord } from "@/db/schema";
 
 /** 平台下拉的哨兵值：Radix Select 不接受空字符串作为 value */
@@ -51,8 +58,8 @@ export function ViewRecordDialog({
   mediaType: string;
   platforms: Platform[];
   defaultPlatformName: string | null;
-  /** 该剧 TMDB 的季列表；为空时季号只能手填 */
-  seasons: { seasonNumber: number; name: string }[];
+  /** 该剧 TMDB 的季列表；为空时季号只能手填。`episodeCount` 用于卡住手填集数的上限 */
+  seasons: { seasonNumber: number; name: string; episodeCount?: number }[];
   record?: ViewRecord;
 }) {
   const isEdit = Boolean(record);
@@ -61,6 +68,35 @@ export function ViewRecordDialog({
     isEdit ? updateViewRecordAction : createViewRecordAction,
     undefined,
   );
+
+  // 季号要跟着用户的选择走，才知道该用哪一季的集数去卡上限，
+  // 所以这里是受控的（Radix Select 的 value 仍会随表单一起提交）。
+  const [progressSeason, setProgressSeason] = useState<number | null>(
+    record?.progressSeason ?? null,
+  );
+  const seasonCap =
+    seasons.find((s) => s.seasonNumber === progressSeason)?.episodeCount ?? null;
+
+  // 被手动锁定、同步不会覆盖的字段（库里存字段名，这里换成中文展示）
+  const lockedFields = parseManualFields(record?.manualFieldsJson);
+  // 勾选后要恢复跟随豆瓣的字段，与「恢复」按钮的提交内容
+  const [unlockFields, setUnlockFields] = useState<string[]>([]);
+  const [unlockState, unlockAction, unlocking] = useActionState<FormState, FormData>(
+    unlockViewRecordFieldsAction,
+    undefined,
+  );
+
+  // 恢复成功后清掉勾选并提示，效果与「保存」的轻提示保持一致
+  const [unlockedBy, setUnlockedBy] = useState<FormState>(undefined);
+  if (unlockState !== unlockedBy) {
+    setUnlockedBy(unlockState);
+    if (unlockState?.ok) {
+      setUnlockFields([]);
+      toast.success(unlockState.message ?? "已恢复跟随豆瓣");
+    } else if (unlockState?.error) {
+      toast.error(unlockState.error);
+    }
+  }
 
   // 保存成功后关闭弹窗。用渲染期比对代替 effect，避免级联渲染。
   const [closedBy, setClosedBy] = useState<FormState>(undefined);
@@ -80,7 +116,17 @@ export function ViewRecordDialog({
   ).sort((a, b) => a - b);
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        // 打开时把受控季号拉回记录上的值，丢掉上次没保存的草稿
+        if (next) {
+          setProgressSeason(record?.progressSeason ?? null);
+          setUnlockFields([]);
+        }
+      }}
+    >
       <DialogTrigger asChild>
         {isEdit ? (
           <Button variant="ghost" size="icon-sm" aria-label="编辑记录">
@@ -212,10 +258,11 @@ export function ViewRecordDialog({
                   {seasonOptions.length > 0 ? (
                     <Select
                       name="progressSeason"
-                      defaultValue={
-                        record?.progressSeason != null
-                          ? String(record.progressSeason)
-                          : NO_SEASON
+                      value={progressSeason == null ? NO_SEASON : String(progressSeason)}
+                      onValueChange={(value) =>
+                        setProgressSeason(
+                          value === NO_SEASON ? null : Number.parseInt(value, 10),
+                        )
                       }
                     >
                       <SelectTrigger id="progressSeason" className="h-8 w-full">
@@ -236,7 +283,11 @@ export function ViewRecordDialog({
                       name="progressSeason"
                       type="number"
                       min={0}
-                      defaultValue={record?.progressSeason ?? ""}
+                      value={progressSeason ?? ""}
+                      onChange={(event) => {
+                        const parsed = Number.parseInt(event.target.value, 10);
+                        setProgressSeason(Number.isFinite(parsed) ? parsed : null);
+                      }}
                       placeholder="2"
                     />
                   )}
@@ -248,6 +299,7 @@ export function ViewRecordDialog({
                     name="progressEpisode"
                     type="number"
                     min={0}
+                    max={seasonCap ?? undefined}
                     defaultValue={record?.progressEpisode ?? ""}
                     placeholder="5"
                   />
@@ -259,11 +311,17 @@ export function ViewRecordDialog({
                     name="episodesWatched"
                     type="number"
                     min={0}
+                    max={seasonCap ?? undefined}
                     defaultValue={record?.episodesWatched ?? ""}
                     placeholder="12"
                   />
                 </div>
               </div>
+              {seasonCap != null ? (
+                <p className="text-xs text-muted-foreground">
+                  第 {progressSeason} 季共 {seasonCap} 集
+                </p>
+              ) : null}
             </fieldset>
           ) : null}
 
@@ -306,6 +364,58 @@ export function ViewRecordDialog({
             </Button>
           </DialogFooter>
         </form>
+
+        {/* 单独一个表单：解锁只动锁定名单，不该顺带把没保存的编辑也提交上去 */}
+        {isEdit && lockedFields.length > 0 ? (
+          <form
+            action={unlockAction}
+            className="space-y-3 rounded-lg border border-border/70 p-4"
+          >
+            <input type="hidden" name="id" value={record!.id} />
+
+            <div className="space-y-1">
+              <p className="text-sm font-medium">已手动修改的字段</p>
+              <p className="text-xs text-muted-foreground">
+                这些字段你自己改过，豆瓣同步不会覆盖它们。勾选后可恢复跟随豆瓣，
+                下次同步会写回豆瓣的值。
+              </p>
+            </div>
+
+            <div className="grid gap-2 sm:grid-cols-2">
+              {lockedFields.map((field) => (
+                <label
+                  key={field}
+                  className="flex items-center gap-2 text-sm text-foreground/90"
+                >
+                  <input
+                    type="checkbox"
+                    name="fields"
+                    value={field}
+                    checked={unlockFields.includes(field)}
+                    onChange={(event) =>
+                      setUnlockFields((prev) =>
+                        event.target.checked
+                          ? [...prev, field]
+                          : prev.filter((name) => name !== field),
+                      )
+                    }
+                    className="size-4 shrink-0 rounded border-input accent-primary"
+                  />
+                  {viewRecordFieldLabel(field)}
+                </label>
+              ))}
+            </div>
+
+            <Button
+              type="submit"
+              variant="outline"
+              size="sm"
+              disabled={unlocking || unlockFields.length === 0}
+            >
+              {unlocking ? "恢复中…" : "恢复跟随豆瓣"}
+            </Button>
+          </form>
+        ) : null}
       </DialogContent>
     </Dialog>
   );

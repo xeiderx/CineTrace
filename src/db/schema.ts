@@ -227,10 +227,28 @@ export const viewRecord = sqliteTable(
     watchIndex: integer("watch_index").notNull().default(1),
 
     /* ---- 剧集进度：看到第几季第几集 ---- */
+    /**
+     * 豆瓣条目归属的季号。多季剧在豆瓣是一季一个条目，同步时按标题里的季标识
+     * 落在这里，详情页据此把每条记录对到对应的季上。
+     *
+     * 注意它同时承担「归属季」与「看到第几季」两种含义，所以逐集标记
+     * （view_episode）不会改写它——否则会把某季的记录挪去别的季。
+     */
     progressSeason: integer("progress_season"),
+    /**
+     * 手动填写的集数进度。逐集标记落地后，真实进度以 view_episode 为准，
+     * 这两列只作为「没有逐集数据时」的兜底展示值。
+     */
     progressEpisode: integer("progress_episode"),
-    /** 累计已看集数 */
+    /** 手动填写的累计已看集数，同上，作为兜底值 */
     episodesWatched: integer("episodes_watched"),
+
+    /**
+     * 被手动改过的字段名（JSON 数组，如 ["rating","watchedAt"]）。
+     * 同步遇到这些字段就跳过，不再用豆瓣的值覆盖——「手动改过就不再被同步改回去」。
+     * 界面上的「恢复跟随豆瓣」会把这些名字移除，之后的同步重新接管。
+     */
+    manualFieldsJson: text("manual_fields_json").default("[]").notNull(),
 
     /* ---- 豆瓣侧变动 ---- */
     /**
@@ -254,6 +272,62 @@ export const viewRecord = sqliteTable(
     index("view_record_watched_at_idx").on(t.watchedAt),
     index("view_record_platform_idx").on(t.platformId),
     index("view_record_status_idx").on(t.status),
+  ],
+);
+
+/* -------------------------------------------------------------------------- */
+/*                            逐集观看明细（追剧）                              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * 逐集观看记录：看过的每一集一行。
+ *
+ * 为什么单独建表而不是把进度继续挤在 view_record 的两个整数列上：
+ * 追剧的真实形态是「跳着看」「补看某几集」「一次点完整季」，单个「看到第几集」
+ * 表达不了，也算不出某季的确切起止时间。这里一集一行，季进度、整剧进度、
+ * 季起止时间全部由它派生。
+ *
+ * `watchIndex` 与 view_record 同义：二刷时按同一套刷次编号另开一组逐集记录。
+ */
+export const viewEpisode = sqliteTable(
+  "view_episode",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+
+    /**
+     * 所属作品。作品被删除时逐集记录一并清掉（cascade）——
+     * 它们是进度的派生数据，脱离作品没有任何意义。
+     */
+    workId: integer("work_id")
+      .notNull()
+      .references(() => work.id, { onDelete: "cascade" }),
+
+    /** 第几刷，与 view_record.watchIndex 对应 */
+    watchIndex: integer("watch_index").notNull().default(1),
+
+    seasonNumber: integer("season_number").notNull(),
+    episodeNumber: integer("episode_number").notNull(),
+
+    /** 该集观看日期，ISO 文本（YYYY-MM-DD）。季/整剧起止时间按此聚合 */
+    watchedAt: text("watched_at"),
+
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+    updatedAt: integer("updated_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`)
+      .$onUpdate(() => new Date()),
+  },
+  (t) => [
+    // 同一刷里同一集只有一行，重复标记走 upsert 而非插出多行
+    uniqueIndex("view_episode_seat_uniq").on(
+      t.workId,
+      t.watchIndex,
+      t.seasonNumber,
+      t.episodeNumber,
+    ),
+    index("view_episode_work_idx").on(t.workId, t.watchIndex),
   ],
 );
 
@@ -479,8 +553,13 @@ export const sessionRelations = relations(session, ({ one }) => ({
 
 export const workRelations = relations(work, ({ many }) => ({
   viewRecords: many(viewRecord),
+  viewEpisodes: many(viewEpisode),
   workTags: many(workTag),
   collectionItems: many(collectionItem),
+}));
+
+export const viewEpisodeRelations = relations(viewEpisode, ({ one }) => ({
+  work: one(work, { fields: [viewEpisode.workId], references: [work.id] }),
 }));
 
 export const viewRecordRelations = relations(viewRecord, ({ one }) => ({
@@ -529,6 +608,8 @@ export type Work = typeof work.$inferSelect;
 export type NewWork = typeof work.$inferInsert;
 export type ViewRecord = typeof viewRecord.$inferSelect;
 export type NewViewRecord = typeof viewRecord.$inferInsert;
+export type ViewEpisode = typeof viewEpisode.$inferSelect;
+export type NewViewEpisode = typeof viewEpisode.$inferInsert;
 export type Platform = typeof platform.$inferSelect;
 export type Tag = typeof tag.$inferSelect;
 export type Collection = typeof collection.$inferSelect;
