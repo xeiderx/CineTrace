@@ -1,4 +1,4 @@
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { syncIssue, viewEpisode, viewRecord, work, type NewWork } from "@/db/schema";
 import { getSetting, setSetting } from "@/lib/settings";
@@ -322,11 +322,11 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
   /** 因作息窗口结束而暂停的位置；与「被豆瓣拒绝」不同，下一轮直接续跑 */
   let pausedAt: { status: ViewStatus; start: number } | null = null;
   /**
-   * 「看过」列表这一轮是否从第 1 页一路翻到了真实末页。
-   * 只有这种完整的一轮才拿得到全量条目，才能反推「哪些记录已不在豆瓣列表里」；
-   * 续跑（从断点页起）与被拒/暂停（剩下没翻）都不算。
+   * 这一轮从第 1 页一路翻到真实末页的列表。
+   * 只有完整翻完的列表，seenSourceKeys 才覆盖得住它，才能反推「哪些记录已不在豆瓣列表里」；
+   * 续跑（从断点页起）与被拒/暂停（剩下没翻）的列表都不进这个集合。
    */
-  let watchedTraversed = false;
+  const traversedLists = new Set<ViewStatus>();
 
   for (const list of enabledLists) {
     const label = VIEW_STATUS_LABELS[list.status];
@@ -422,11 +422,11 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
       if (hasNext === null && items.length < LIST_PAGE_SIZE) break;
     }
 
-    // 必须从第 1 页起翻且翻到末页，seenSourceKeys 才真正覆盖整份「看过」列表。
+    // 必须从第 1 页起翻且翻到末页，seenSourceKeys 才真正覆盖整份列表。
     // 续跑轮（listStart > 0）只翻了后半段，前半段这一轮压根没见过，
     // 拿去比对会把上千条正常记录误标成已移除。
-    if (list.status === "watched" && listStart === 0 && !blockedAtFirstPage) {
-      watchedTraversed = reachedEnd;
+    if (listStart === 0 && !blockedAtFirstPage && reachedEnd) {
+      traversedLists.add(list.status);
     }
 
     if (pausedAt !== null) break; // 出窗了，后面的列表留给下一轮
@@ -477,13 +477,14 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
     setSetting("douban.lastManualIncAt", new Date().toISOString());
   }
 
-  // 「豆瓣已移除」标记：只有这轮把「看过」列表从第 1 页完整翻到末页时才敢做。
+  // 「豆瓣已移除」标记：只有这轮从第 1 页完整翻到末页的列表才敢做比对。
   // 增量轮只翻首页、续跑轮只翻后半段、被拒或出窗暂停时剩下的页没翻——
   // 这些情况下 seenSourceKeys 都不是全量，拿去比对会大面积误标。
-  // 想看/在看两个小列表不参与比对：它们可以单独关掉同步，关掉时条目压根没进集合。
+  // 关掉同步的小列表压根没进 enabledLists，自然不会出现在 traversedLists 里，
+  // 也就不会把整个列表误判成「已移除」。
   let removedMarked = 0;
-  if (full && watchedTraversed) {
-    removedMarked = markDoubanRemoved(seenSourceKeys);
+  if (full && traversedLists.size > 0) {
+    removedMarked = markDoubanRemoved(seenSourceKeys, traversedLists);
   }
 
   const summary = `${mode}同步共 ${stats.itemsSeen} 条（新增 ${stats.itemsNew} / 更新 ${stats.itemsUpdated}），错误 ${stats.errorCount} 条${
@@ -518,28 +519,33 @@ function isFullSyncDue(): boolean {
 }
 
 /**
- * 全量翻完一轮后，把本地「看过」记录里本轮没见到的打上「豆瓣已移除」标记。
+ * 全量翻完一轮后，把本地记录里本轮没见到的打上「豆瓣已移除」标记。
  *
  * 豆瓣对删除/合并/转私密这三种变动不给任何信号，条目只是从列表里消失，
- * 所以只能反推：整份「看过」列表都翻过了、这一条却不在其中，那它多半已经不在了。
+ * 所以只能反推：整份列表都翻过了、这一条却不在其中，那它多半已经不在了。
  * 删除/合并/转私密在列表上无法区分，这也是「只标记、不自动删」的原因——
  * 标记可逆，真删了记录里的评分和短评就找不回来了。
  *
- * 只处理「看过」：想看/在看两个小列表可以单独关掉同步，关掉时它们的条目
- * 根本不会进 seenSourceKeys，一并比对会把整个列表误标成已移除。
- * 重新出现的条目会在 processItem 里把标记清掉。
+ * 判定范围只取本轮完整翻完的列表（`traversed`）对应的状态：
+ * 关掉同步的小列表根本没抓，一并比对会把整个列表误标成已移除；
+ * 想看/在看被从豆瓣删掉时本地状态会永远停在原处（追剧页会一直挂着它），
+ * 所以它们也要参与，但只打标记——状态的取舍留给用户在界面上决定。
  *
  * @param seen 本轮在豆瓣列表上见到的全部 sourceKey
+ * @param traversed 本轮从第 1 页完整翻到末页的列表状态
  * @returns 本轮新打上标记的记录数
  */
-function markDoubanRemoved(seen: ReadonlySet<string>): number {
+function markDoubanRemoved(
+  seen: ReadonlySet<string>,
+  traversed: ReadonlySet<ViewStatus>,
+): number {
   const candidates = db
     .select({ id: viewRecord.id, sourceKey: viewRecord.sourceKey })
     .from(viewRecord)
     .where(
       and(
         eq(viewRecord.source, "douban"),
-        eq(viewRecord.status, "watched"),
+        inArray(viewRecord.status, [...traversed]),
         // 已标记过的不用再看：重复写只会把「移除时间」一直往后推
         isNull(viewRecord.doubanRemovedAt),
       ),

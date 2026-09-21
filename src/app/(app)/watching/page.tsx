@@ -9,7 +9,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { formatDate, viewStatusTone, type ViewStatus } from "@/lib/labels";
+import { DOUBAN_REMOVED_LABEL, formatDate, viewStatusTone, type ViewStatus } from "@/lib/labels";
 import { listWorks, type WorkListItem } from "@/lib/queries";
 import {
   nextEpisodeTarget,
@@ -169,6 +169,16 @@ function WatchingCard({
             </span>
           ) : null}
           {season ? <span className="text-muted-foreground">{season.name}</span> : null}
+          {/* 豆瓣把条目删掉/合并/转私密后，本地状态会一直停在原处——
+              「在看」页因此永远挂着它。这里只提示，状态怎么改由用户的菜单决定。 */}
+          {item.removedCount > 0 ? (
+            <span
+              className="inline-flex h-5 items-center rounded-4xl bg-amber-500/15 px-2 font-medium text-amber-400"
+              title="最后一次全量同步时，这条记录已不在豆瓣列表上。可用右侧菜单改成搁置或弃看，或到详情页清理"
+            >
+              {DOUBAN_REMOVED_LABEL}
+            </span>
+          ) : null}
           {season?.voteAverage ? (
             <span className="inline-flex items-center gap-1 text-muted-foreground">
               <Star className="size-3 fill-primary text-primary" />
