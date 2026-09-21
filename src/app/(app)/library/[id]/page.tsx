@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, CalendarDays, Clock, Film, ListChecks, Star, Tv } from "lucide-react";
+import { CalendarDays, Clock, Film, ListChecks, Star, Tv } from "lucide-react";
 import {
   deleteViewRecordAction,
   deleteWorkAction,
@@ -23,7 +22,7 @@ import {
   progressLabel,
 } from "@/components/library/work-card";
 import { EmptyState } from "@/components/layout/empty-state";
-import { Button } from "@/components/ui/button";
+import { BackButton } from "@/components/layout/back-button";
 import { Progress } from "@/components/ui/progress";
 import {
   DOUBAN_REMOVED_LABEL,
@@ -371,12 +370,7 @@ export default async function WorkDetailPage({
   return (
     <>
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-        <Button variant="ghost" size="sm" asChild>
-          <Link href="/library">
-            <ArrowLeft />
-            返回档案库
-          </Link>
-        </Button>
+        <BackButton />
 
         <div className="flex items-center gap-2">
           <ViewRecordDialog
