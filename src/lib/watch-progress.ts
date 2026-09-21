@@ -423,12 +423,18 @@ export type NextEpisodeTarget = {
  *
  * 只对「在看」的剧有意义：一集都没标记的剧不该在档案库里挂满「第 1 集」按钮，
  * 想开始看应该去详情页决定从哪一集、哪一天开始。整剧看完同理没有下一集。
+ *
+ * `allowZeroProgress` 是给追剧页开的例外：那儿列出的剧本来就都是用户明确标了
+ * 想看的，一集没标记也应当能就地开始追，而不必先进详情页。档案库不传这个开关，
+ * 保持「零进度不挂按钮」的克制。
  */
 export function nextEpisodeTarget(
   progress: ShowProgress,
+  options?: { allowZeroProgress?: boolean },
 ): NextEpisodeTarget | null {
   const { currentSeason, seasons, completed, watchedCount } = progress;
-  if (completed || watchedCount === 0 || currentSeason == null) return null;
+  if (completed || currentSeason == null) return null;
+  if (watchedCount === 0 && !options?.allowZeroProgress) return null;
 
   // currentSeason 只是「第一个没看完的季」，它可能没有集数（TMDB 没给分季结构），
   // 这时往后找一个有集数的季，能做进度标记的才是有效目标

@@ -1,6 +1,13 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { Ban, CirclePause, CirclePlay, Star, type LucideIcon } from "lucide-react";
+import {
+  Ban,
+  Bookmark,
+  CirclePause,
+  CirclePlay,
+  Star,
+  type LucideIcon,
+} from "lucide-react";
 import { NextEpisodeButton } from "@/components/library/next-episode-button";
 import { WatchingStatusMenu } from "@/components/library/watching-status-menu";
 import { RatingStars, WorkPoster } from "@/components/library/work-card";
@@ -21,13 +28,15 @@ import {
 export const metadata: Metadata = { title: "追剧" };
 
 /**
- * 三个标签页。搁置与弃看只由本地设置——豆瓣同步只会产出想看/在看/看过，
- * 所以这两页的内容多少完全取决于用户有没有主动去标。
+ * 四个标签页。搁置与弃看只由本地设置——豆瓣同步只会产出想看/在看/看过，
+ * 所以这两页的内容多少完全取决于用户有没有主动去标。想看这一页则两头都有来源：
+ * 豆瓣的想看列表同步下来，以及在详情页手动标成想看。
  */
-type WatchingTab = "watching" | "on_hold" | "dropped";
+type WatchingTab = "watching" | "wish" | "on_hold" | "dropped";
 
 const TABS: { value: WatchingTab; label: string; icon: LucideIcon }[] = [
   { value: "watching", label: "在看", icon: CirclePlay },
+  { value: "wish", label: "想看", icon: Bookmark },
   { value: "on_hold", label: "搁置", icon: CirclePause },
   { value: "dropped", label: "弃看", icon: Ban },
 ];
@@ -59,8 +68,9 @@ function currentSeason(progress: ShowProgress): SeasonStats | null {
 /**
  * 把一部剧归到哪个标签页。
  *
- * 搁置与弃看是用户明确的决定，优先于进度判断——哪怕这部剧早就标满了集数，
- * 只要用户说弃看，它就该待在弃看页，而不是被「已看完」悄悄吞掉。
+ * 搁置、弃看与想看是用户明确的决定，优先于进度判断——哪怕这部剧早就标满了集数，
+ * 只要用户说弃看，它就该待在弃看页，而不是被「已看完」悄悄吞掉。想看同理：
+ * 它多半一集没标，若交给下面的进度判断就会被丢掉。
  *
  * 剩下去看那一页的判定只认两件事：整剧没看完，且已经动过——要么标过至少一集，
  * 要么豆瓣侧是在看。一集都没标的「在看」也留在列表里，否则刚把一部剧标成在看，
@@ -69,6 +79,7 @@ function currentSeason(progress: ShowProgress): SeasonStats | null {
 function bucketOf(item: WorkListItem): WatchingTab | null {
   if (item.latestStatus === "dropped") return "dropped";
   if (item.latestStatus === "on_hold") return "on_hold";
+  if (item.latestStatus === "wish") return "wish";
 
   const progress = item.progress;
   if (!progress || progress.completed) return null;
@@ -80,6 +91,7 @@ function bucketOf(item: WorkListItem): WatchingTab | null {
 function collectGroups(): Record<WatchingTab, WatchingItem[]> {
   const groups: Record<WatchingTab, WatchingItem[]> = {
     watching: [],
+    wish: [],
     on_hold: [],
     dropped: [],
   };
@@ -116,7 +128,9 @@ function WatchingCard({
 }) {
   const { progress } = item;
   const season = currentSeason(progress);
-  const nextEpisode = nextEpisodeTarget(progress);
+  // 追剧页的剧都是用户自己标过状态的，一集没标记也该能就地开始追，
+  // 所以这里放开零进度限制；档案库那份调用不传这个开关，保持克制
+  const nextEpisode = nextEpisodeTarget(progress, { allowZeroProgress: true });
   const label = showProgressLabel(progress);
   const total = progress.totalCount;
   const percent = total > 0 ? (progress.watchedCount / total) * 100 : 0;
@@ -219,7 +233,7 @@ function WatchingCard({
   );
 }
 
-/** 每个标签页的空态文案。「在看」为空是常态，另外两页得说清怎么把剧放进来 */
+/** 每个标签页的空态文案。「在看」为空是常态，另外几页得说清怎么把剧放进来 */
 const EMPTY_STATES: Record<
   WatchingTab,
   { title: string; description: string; withAction: boolean }
@@ -227,6 +241,12 @@ const EMPTY_STATES: Record<
   watching: {
     title: "还没有在追的剧",
     description: "在档案库里打开一部剧集，标记几集进度后，它就会出现在这里。",
+    withAction: true,
+  },
+  wish: {
+    title: "没有想看的剧",
+    description:
+      "打算以后看的剧可以标成想看，豆瓣的想看列表同步下来也会到这儿。想开追时点卡片右上角的菜单改成在看。",
     withAction: true,
   },
   on_hold: {
@@ -255,7 +275,7 @@ export default async function WatchingPage({ searchParams }: PageProps<"/watchin
     <>
       <PageHeader
         title="追剧"
-        description="正在追、暂时搁置和已经弃看的剧集。点一下即可推进到下一集。"
+        description="想看、正在追、暂时搁置和已经弃看的剧集。点一下即可推进到下一集。"
       >
         <Button variant="outline" size="sm" asChild>
           <Link href={`/library?type=tv&status=${tab}`}>在档案库筛选</Link>

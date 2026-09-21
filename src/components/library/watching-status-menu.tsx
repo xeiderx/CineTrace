@@ -1,7 +1,7 @@
 "use client";
 
 import { useTransition } from "react";
-import { Ban, CirclePause, CirclePlay, Ellipsis, Loader2 } from "lucide-react";
+import { Ban, Bookmark, CirclePause, CirclePlay, Ellipsis, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { setViewRecordStatusAction } from "@/app/actions/library";
 import { Button } from "@/components/ui/button";
@@ -14,9 +14,13 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { viewStatusLabel, type ViewStatus } from "@/lib/labels";
 
-/** 本地可切的目标状态。搁置与弃看豆瓣同步不会产出，只能在这儿设 */
+/**
+ * 本地可切的目标状态。四个目标里，豆瓣同步只会产出在看/想看，
+ * 搁置与弃看只能在这儿设。
+ */
 const TARGETS: { value: ViewStatus; icon: typeof CirclePlay; hint: string }[] = [
   { value: "watching", icon: CirclePlay, hint: "回到在看列表" },
+  { value: "wish", icon: Bookmark, hint: "先记下来，想看了再开追" },
   { value: "on_hold", icon: CirclePause, hint: "先放着，之后接着追" },
   { value: "dropped", icon: Ban, hint: "不追了，从在看里移出" },
 ];

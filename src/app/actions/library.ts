@@ -826,6 +826,13 @@ export async function updateViewRecordAction(
   );
   if (progressError) return { error: progressError };
 
+  // 与追剧页的状态菜单同一处理：把「看过」改成别的状态前，先把这一季固化成
+  // 逐集记录，否则该季会失去「已完成」的判据，进度凭空归零。
+  // 这里用改之前的 progressSeason——「看过」对应的是修改前那一季的事实。
+  if (row.status === "watched" && status !== "watched") {
+    freezeWatchedSeason(row, row.finishedAt ?? row.watchedAt ?? todayIso());
+  }
+
   db.update(viewRecord)
     .set({
       ...values,
@@ -1086,6 +1093,44 @@ export async function unlockViewRecordFieldsAction(
 }
 
 /**
+ * 把流水上「这一季看完了」的事实固化成逐集记录。
+ *
+ * 季级的完成判据读的是该季最近一条流水的 status（见 `buildShowProgress` 的
+ * `doubanCompleted`）。用户把某条「看过」改成弃看/搁置/想看后，这个判据立刻
+ * 变假，该季进度就回退到逐集数据——而豆瓣同步从不落逐集记录，于是整季进度
+ * 凭空归零。改状态之前先把这一季物化成逐集记录，事实就落在真正的数据源上，
+ * 之后无论状态怎么改，进度都还在。
+ *
+ * 落到哪一季看流水上的 `progressSeason`；单季剧的标题里没有季号，流水上也就
+ * 没有这一列，此时整部剧就是那一季。seasonsJson 里查不到这一季（TMDB 没匹配上、
+ * 季结构为空）时不猜集数——宁可不物化，也不要写进一批错误的集号。
+ */
+function freezeWatchedSeason(row: ViewRecord, watchedAt: string): void {
+  if (row.workId == null) return;
+
+  const target = db
+    .select({ mediaType: work.mediaType, seasonsJson: work.seasonsJson })
+    .from(work)
+    .where(eq(work.id, row.workId))
+    .get();
+  if (!target || target.mediaType !== "tv") return;
+
+  const seasons = parseSeasons(target.seasonsJson);
+  const seasonNumber =
+    row.progressSeason ?? (seasons.length === 1 ? seasons[0].seasonNumber : null);
+  if (seasonNumber == null) return;
+
+  const episodeCount = seasons.find(
+    (s) => s.seasonNumber === seasonNumber,
+  )?.episodeCount;
+  if (episodeCount == null || episodeCount <= 0 || episodeCount > MAX_BATCH_EPISODES) {
+    return;
+  }
+
+  setSeasonProgress(row.workId, seasonNumber, episodeCount, watchedAt);
+}
+
+/**
  * 只改观看状态，不动其他字段。
  *
  * 不能复用 updateViewRecordAction：那个表单提交什么就写什么，缺的字段会被清成
@@ -1107,6 +1152,11 @@ export async function setViewRecordStatusAction(
   const row = db.select().from(viewRecord).where(eq(viewRecord.id, id)).get();
   if (!row) return { error: "记录不存在" };
   if (row.status === status) return { ok: true };
+
+  // 改出「看过」前，先把这条流水代表的整季固化成逐集记录，否则该季进度归零
+  if (row.status === "watched") {
+    freezeWatchedSeason(row, row.finishedAt ?? row.watchedAt ?? todayIso());
+  }
 
   db.update(viewRecord)
     .set({
