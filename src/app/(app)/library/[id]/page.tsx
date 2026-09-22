@@ -43,9 +43,11 @@ import {
   getWorkDetail,
   latestRecord,
   listPlatforms,
+  listSourceChannels,
   listTags,
   posterUrl,
   type SeasonWithRecord,
+  type SourceChannelNode,
   type ViewRecordWithPlatform,
 } from "@/lib/queries";
 import { dateSourceHint, showProgressLabel, todayIso } from "@/lib/watch-progress";
@@ -90,6 +92,43 @@ function PlatformChip({ record }: { record: ViewRecordWithPlatform }) {
   );
 }
 
+/**
+ * 来源渠道小标签：显示「一级 › 二级」，有图片用图片、没有则用标识色圆点。
+ * 只选了二级时把一级名一并带上，否则单看「彩虹岛」不知道是哪个大类下的站点。
+ */
+function SourceChannelChip({ record }: { record: ViewRecordWithPlatform }) {
+  if (!record.sourceChannelName) return null;
+
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-4xl bg-muted px-2 py-0.5 text-xs">
+      {record.sourceChannelIcon ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={record.sourceChannelIcon}
+          alt=""
+          className="size-3.5 rounded-sm object-contain"
+        />
+      ) : record.sourceChannelColor ? (
+        <span
+          aria-hidden
+          className="size-2 rounded-full"
+          style={{ backgroundColor: record.sourceChannelColor }}
+        />
+      ) : null}
+      {record.sourceChannelParentName ? (
+        <>
+          <span className="text-muted-foreground">
+            {record.sourceChannelParentName} ›
+          </span>
+          {record.sourceChannelName}
+        </>
+      ) : (
+        record.sourceChannelName
+      )}
+    </span>
+  );
+}
+
 /** 单条观影流水的展示：状态、评分、时间、平台、剧集进度、短评与该次的标签 */
 function ViewRecordItem({
   record,
@@ -98,6 +137,7 @@ function ViewRecordItem({
   defaultPlatformName,
   seasons,
   allTags,
+  sourceChannels,
 }: {
   record: ViewRecordWithPlatform;
   mediaType: string;
@@ -106,6 +146,8 @@ function ViewRecordItem({
   seasons: SeasonWithRecord[];
   /** 全部标签，透传给弹窗里的标签选择区 */
   allTags: Tag[];
+  /** 来源渠道两级树，透传给弹窗里的来源渠道下拉 */
+  sourceChannels: SourceChannelNode[];
 }) {
   const progress = progressLabel({
     mediaType,
@@ -142,6 +184,7 @@ function ViewRecordItem({
                 : "未填写日期"}
           </span>
           <PlatformChip record={record} />
+          <SourceChannelChip record={record} />
           {/* 豆瓣把它删掉/合并/转私密后本地仍留着这条流水，只是打上时间戳。
               清理与否由用户决定，因此只提示、不自动删。 */}
           {record.doubanRemovedAt ? (
@@ -192,6 +235,7 @@ function ViewRecordItem({
           seasons={seasons}
           record={record}
           allTags={allTags}
+          sourceChannels={sourceChannels}
         />
         <ConfirmDeleteButton
           action={deleteViewRecordAction}
@@ -355,6 +399,7 @@ export default async function WorkDetailPage({
   const platforms = listPlatforms();
   const defaultPlatform = getDefaultPlatform();
   const allTags = listTags();
+  const sourceChannels = listSourceChannels();
   const isTv = item.mediaType === "tv";
 
   const latest = latestRecord(records);
@@ -408,6 +453,7 @@ export default async function WorkDetailPage({
             defaultPlatformName={defaultPlatform?.name ?? null}
             seasons={seasons}
             allTags={allTags}
+            sourceChannels={sourceChannels}
           />
           <WorkMatchDialog workId={item.id} workTitle={item.title} />
           <WorkFormDialog
@@ -591,6 +637,7 @@ export default async function WorkDetailPage({
                 defaultPlatformName={defaultPlatform?.name ?? null}
                 seasons={seasons}
                 allTags={allTags}
+                sourceChannels={sourceChannels}
               />
             ))}
           </ul>

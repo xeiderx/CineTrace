@@ -1,8 +1,12 @@
 import { randomInt } from "node:crypto";
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "./index";
-import { platform, setting, user } from "./schema";
-import { DEFAULT_PLATFORMS, DEFAULT_SETTINGS } from "./defaults";
+import { platform, setting, sourceChannel, user } from "./schema";
+import {
+  DEFAULT_PLATFORMS,
+  DEFAULT_SETTINGS,
+  DEFAULT_SOURCE_CHANNELS,
+} from "./defaults";
 import { hashPassword } from "@/lib/password";
 
 /**
@@ -69,6 +73,24 @@ async function seed() {
     if (!exists) db.insert(platform).values(p).run();
   }
   console.log(`平台：${DEFAULT_PLATFORMS.length} 项已就绪`);
+
+  /*
+   * 来源渠道只预置一级分类。（parent_id, name）唯一索引在 SQLite 里
+   * 拦不住一级重名（NULL 互不相等），所以这里按 name + parent_id IS NULL 显式查重。
+   */
+  for (const c of DEFAULT_SOURCE_CHANNELS) {
+    const exists = db
+      .select()
+      .from(sourceChannel)
+      .where(and(isNull(sourceChannel.parentId), eq(sourceChannel.name, c.name)))
+      .get();
+    if (!exists) {
+      db.insert(sourceChannel)
+        .values({ name: c.name, color: c.color, sortOrder: c.sortOrder })
+        .run();
+    }
+  }
+  console.log(`来源渠道：${DEFAULT_SOURCE_CHANNELS.length} 个一级分类已就绪`);
 
   for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
     const exists = db.select().from(setting).where(eq(setting.key, key)).get();

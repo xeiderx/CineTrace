@@ -11,6 +11,16 @@ export const DEFAULT_PLATFORMS = [
   { name: "影院", icon: "clapperboard", color: "#e06c75", isDefault: false },
 ] as const;
 
+/**
+ * 预置来源渠道一级分类（二级分类由用户自行添加）。
+ * 只预置一级，不预置任何二级——各家 PT 站点/流媒体服务因人而异。
+ */
+export const DEFAULT_SOURCE_CHANNELS = [
+  { name: "流媒体", color: "#5b9bd5", sortOrder: 0 },
+  { name: "PT站点", color: "#e0a458", sortOrder: 1 },
+  { name: "EMBY服", color: "#9b7bd5", sortOrder: 2 },
+] as const;
+
 /** 预置应用设置。key 用点分命名空间，值与前端表单一一对应。 */
 export const DEFAULT_SETTINGS = {
   "douban.uid": "",

@@ -3,12 +3,13 @@
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   collectionItem,
   person,
   platform,
+  sourceChannel,
   tag,
   viewEpisode,
   viewRecord,
@@ -804,6 +805,8 @@ export async function createViewRecordAction(
       comment: text(formData, "comment"),
       // 对话框里选择「默认」时不传 platformId，读取时回落到默认平台
       platformId: int(formData, "platformId"),
+      // 来源渠道可以不选，不选即 null
+      sourceChannelId: int(formData, "sourceChannelId"),
       watchIndex: (maxRow?.value ?? 0) + 1,
       progressSeason,
       progressEpisode,
@@ -882,6 +885,8 @@ export async function updateViewRecordAction(
     .set({
       ...values,
       platformId: int(formData, "platformId"),
+      // 与 platformId 同法：哨兵值经 int() 落成 null，表示「未指定来源渠道」
+      sourceChannelId: int(formData, "sourceChannelId"),
       watchIndex: int(formData, "watchIndex") ?? row.watchIndex,
       // 集数进度是逐集标记落地前的兜底展示值，缺值就保留原样；
       // 0 是合法值（表示「一集没看」），所以只在键不存在时才兜底。
@@ -1335,4 +1340,137 @@ export async function deleteTagAction(formData: FormData): Promise<void> {
 /** 当前默认平台，供表单展示「默认」选项的文案 */
 export async function currentDefaultPlatformName(): Promise<string | null> {
   return getDefaultPlatform()?.name ?? null;
+}
+
+/* -------------------------------------------------------------------------- */
+/*                                 来源渠道                                     */
+/* -------------------------------------------------------------------------- */
+
+/** 图片 data URL 允许的 MIME。客户端已压缩到 128px，这里只做格式与体积兜底 */
+const ICON_DATA_PATTERN = /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/;
+/** 单张图片上限 400KB。压缩后典型值 8-20KB，超过说明客户端没压缩或被人手工构造 */
+const ICON_DATA_MAX_LENGTH = 400 * 1024;
+
+/**
+ * 新建 / 编辑来源渠道。
+ *
+ * 层级规则（严格两级，UI 不给改层级入口，这里再兜一层）：
+ * - 不带 parentId  → 一级分类
+ * - 带 parentId    → 二级分类，且父级必须存在、父级自身必须是一级
+ * - 编辑时忽略提交上来的 parentId，层级创建时定死
+ *
+ * 重名检查：SQLite 里 NULL 互不相等，(parent_id, name) 唯一索引拦不住一级重名，
+ * 所以父级为空的那一档要显式查一遍。
+ */
+export async function saveSourceChannelAction(
+  _prev: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const id = int(formData, "id");
+  const name = required(formData, "name");
+  if (!name) return { error: "请填写渠道名称" };
+  if (name.length > 40) return { error: "渠道名称不超过 40 个字" };
+
+  const iconRaw = text(formData, "iconData");
+  if (iconRaw && !ICON_DATA_PATTERN.test(iconRaw)) {
+    return { error: "图片格式不支持，请重新选择 PNG / JPEG / WebP 图片" };
+  }
+  if (iconRaw && iconRaw.length > ICON_DATA_MAX_LENGTH) {
+    return { error: "图片体积过大，请换一张更小的图片" };
+  }
+
+  const values = {
+    name,
+    iconData: iconRaw,
+    color: text(formData, "color"),
+    sortOrder: int(formData, "sortOrder") ?? 0,
+  };
+
+  if (id == null) {
+    // 新建：由提交的 parentId 决定层级
+    const parentId = int(formData, "parentId");
+    if (parentId != null) {
+      const parent = db
+        .select()
+        .from(sourceChannel)
+        .where(eq(sourceChannel.id, parentId))
+        .get();
+      if (!parent) return { error: "所属一级分类不存在" };
+      if (parent.parentId != null) return { error: "来源渠道只支持两级，不能挂在二级分类下" };
+    }
+    if (hasSiblingName(name, parentId)) return { error: "同级下已有同名分类" };
+
+    db.insert(sourceChannel).values({ ...values, parentId }).run();
+  } else {
+    const current = db
+      .select()
+      .from(sourceChannel)
+      .where(eq(sourceChannel.id, id))
+      .get();
+    if (!current) return { error: "渠道不存在" };
+
+    // 层级不可改：忽略表单里的 parentId，沿用库里的原值
+    if (hasSiblingName(name, current.parentId, id)) {
+      return { error: "同级下已有同名分类" };
+    }
+
+    db.update(sourceChannel).set(values).where(eq(sourceChannel.id, id)).run();
+  }
+
+  revalidatePath("/settings");
+  revalidatePath("/library");
+  return { ok: true };
+}
+
+/** 同一父级下是否已有同名分类（excludeId 用于编辑时排除自身） */
+function hasSiblingName(
+  name: string,
+  parentId: number | null,
+  excludeId?: number,
+): boolean {
+  const rows = db
+    .select({ id: sourceChannel.id })
+    .from(sourceChannel)
+    .where(
+      and(
+        eq(sourceChannel.name, name),
+        parentId == null
+          ? isNull(sourceChannel.parentId)
+          : eq(sourceChannel.parentId, parentId),
+      ),
+    )
+    .all();
+  return rows.some((row) => row.id !== excludeId);
+}
+
+/**
+ * 删除来源渠道。
+ *
+ * 删一级时连同其下全部二级一起删（自引用外键已是 cascade，这里显式删一遍，
+ * 与平台的处理保持一致，不依赖隐式级联）。引用这些渠道的流水全部回落为「未指定」。
+ */
+export async function deleteSourceChannelAction(formData: FormData): Promise<void> {
+  const id = int(formData, "id");
+  if (id == null) return;
+
+  const row = db.select().from(sourceChannel).where(eq(sourceChannel.id, id)).get();
+  if (!row) return;
+
+  const children = db
+    .select({ id: sourceChannel.id })
+    .from(sourceChannel)
+    .where(eq(sourceChannel.parentId, id))
+    .all();
+  const removedIds = [id, ...children.map((c) => c.id)];
+
+  // 先解除引用，流水本身保留，只是来源渠道变成「未指定」
+  db.update(viewRecord)
+    .set({ sourceChannelId: null })
+    .where(inArray(viewRecord.sourceChannelId, removedIds))
+    .run();
+
+  db.delete(sourceChannel).where(inArray(sourceChannel.id, removedIds)).run();
+
+  revalidatePath("/settings");
+  revalidatePath("/library");
 }

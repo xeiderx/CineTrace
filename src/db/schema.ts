@@ -6,6 +6,7 @@ import {
   sqliteTable,
   text,
   uniqueIndex,
+  type AnySQLiteColumn,
 } from "drizzle-orm/sqlite-core";
 
 /* -------------------------------------------------------------------------- */
@@ -222,6 +223,16 @@ export const viewRecord = sqliteTable(
       onDelete: "set null",
     }),
 
+    /* ---- 来源渠道：这次看的片源是从哪来的，为空表示未指定 ---- */
+    /**
+     * 注意与上面的 `source` 区分：`source` 表示「这条记录是怎么进来的」
+     * （豆瓣同步 / 手工创建），而这里表示「片源来自哪个渠道」。
+     */
+    sourceChannelId: integer("source_channel_id").references(
+      () => sourceChannel.id,
+      { onDelete: "set null" },
+    ),
+
     /* ---- 刷次 ---- */
     /** 第几刷：1 为首刷，2 为二刷 */
     watchIndex: integer("watch_index").notNull().default(1),
@@ -271,6 +282,7 @@ export const viewRecord = sqliteTable(
     index("view_record_work_idx").on(t.workId),
     index("view_record_watched_at_idx").on(t.watchedAt),
     index("view_record_platform_idx").on(t.platformId),
+    index("view_record_source_channel_idx").on(t.sourceChannelId),
     index("view_record_status_idx").on(t.status),
   ],
 );
@@ -352,6 +364,52 @@ export const platform = sqliteTable(
       .default(sql`(unixepoch())`),
   },
   (t) => [index("platform_default_idx").on(t.isDefault)],
+);
+
+/* -------------------------------------------------------------------------- */
+/*                             来源渠道（两级分类）                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * 片源渠道：这次看的片是从哪来的（流媒体 / PT 站点 / EMBY 服……）。
+ *
+ * 与 platform 的区别：platform 回答「在哪看的」（客厅电视 / 手机 / 投影），
+ * 本表回答「片源哪来」——同一部片可以对在客厅电视上放，片源却是彩虹岛。
+ *
+ * 层级用单表自引用表达，且**只允许两级**：
+ *   parentId IS NULL  → 一级分类，如「PT站点」
+ *   parentId 指向一级 → 二级分类，如「彩虹岛」
+ * 数据库没法直接约束「只能两级」，故 action 层显式拒绝把二级再挂到二级下。
+ *
+ * 注意 (parentId, name) 唯一索引拦不住一级分类重名：SQLite 里 NULL 互不相等，
+ * 一级分类的重复名要在 action 里显式查一遍。
+ */
+export const sourceChannel = sqliteTable(
+  "source_channel",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    name: text("name").notNull(),
+    /** 为空即一级分类；非空则是一级的 id */
+    parentId: integer("parent_id").references((): AnySQLiteColumn => sourceChannel.id, {
+      onDelete: "cascade",
+    }),
+    /**
+     * 图标图片，整串存 data URL（形如 `data:image/png;base64,...`）。
+     * 存库而非落盘：public/ 是 Docker 镜像只读层，容器重建即被覆盖；
+     * 存库还能随 JSON 备份一起带走。
+     */
+    iconData: text("icon_data"),
+    /** 标识色，用于徽标与图表 */
+    color: text("color"),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (t) => [
+    uniqueIndex("source_channel_parent_name_uniq").on(t.parentId, t.name),
+    index("source_channel_parent_idx").on(t.parentId),
+  ],
 );
 
 /* -------------------------------------------------------------------------- */
@@ -576,10 +634,24 @@ export const viewRecordRelations = relations(viewRecord, ({ one, many }) => ({
     fields: [viewRecord.platformId],
     references: [platform.id],
   }),
+  sourceChannel: one(sourceChannel, {
+    fields: [viewRecord.sourceChannelId],
+    references: [sourceChannel.id],
+  }),
   viewRecordTags: many(viewRecordTag),
 }));
 
 export const platformRelations = relations(platform, ({ many }) => ({
+  viewRecords: many(viewRecord),
+}));
+
+export const sourceChannelRelations = relations(sourceChannel, ({ one, many }) => ({
+  parent: one(sourceChannel, {
+    fields: [sourceChannel.parentId],
+    references: [sourceChannel.id],
+    relationName: "sourceChannelHierarchy",
+  }),
+  children: many(sourceChannel, { relationName: "sourceChannelHierarchy" }),
   viewRecords: many(viewRecord),
 }));
 
@@ -623,6 +695,8 @@ export type NewViewRecord = typeof viewRecord.$inferInsert;
 export type ViewEpisode = typeof viewEpisode.$inferSelect;
 export type NewViewEpisode = typeof viewEpisode.$inferInsert;
 export type Platform = typeof platform.$inferSelect;
+export type SourceChannel = typeof sourceChannel.$inferSelect;
+export type NewSourceChannel = typeof sourceChannel.$inferInsert;
 export type Tag = typeof tag.$inferSelect;
 export type Collection = typeof collection.$inferSelect;
 export type CollectionItem = typeof collectionItem.$inferSelect;

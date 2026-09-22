@@ -16,12 +16,14 @@ import type { AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 import { db } from "@/db";
 import {
   platform,
+  sourceChannel,
   tag,
   viewEpisode,
   viewRecord,
   viewRecordTag,
   work,
   type Platform,
+  type SourceChannel,
   type Tag,
   type ViewRecord,
   type Work,
@@ -106,6 +108,62 @@ export function tagUsage(): Record<number, number> {
 
   const usage: Record<number, number> = {};
   for (const row of rows) usage[row.id] = row.value;
+  return usage;
+}
+
+/* -------------------------------------------------------------------------- */
+/*                                 来源渠道                                     */
+/* -------------------------------------------------------------------------- */
+
+/** 一级来源渠道，附带其下的二级分类 */
+export type SourceChannelNode = SourceChannel & { children: SourceChannel[] };
+
+/**
+ * 取全部来源渠道，组装成两级树。
+ *
+ * 只查一次表，在内存里分组：渠道数量是几十条量级，两次查询没有必要。
+ * 排序沿用 platform 的口径：sortOrder 升序，同值按 id 升序（即创建先后）。
+ */
+export function listSourceChannels(): SourceChannelNode[] {
+  const rows = db
+    .select()
+    .from(sourceChannel)
+    .orderBy(asc(sourceChannel.sortOrder), asc(sourceChannel.id))
+    .all();
+
+  const childrenByParent = new Map<number, SourceChannel[]>();
+  for (const row of rows) {
+    if (row.parentId == null) continue;
+    const bucket = childrenByParent.get(row.parentId);
+    if (bucket) bucket.push(row);
+    else childrenByParent.set(row.parentId, [row]);
+  }
+
+  return rows
+    .filter((row) => row.parentId == null)
+    .map((row) => ({ ...row, children: childrenByParent.get(row.id) ?? [] }));
+}
+
+/** 拍平成一维（一级在前、其后紧跟其子级），便于下拉与查找 */
+export function flattenSourceChannels(nodes: SourceChannelNode[]): SourceChannel[] {
+  return nodes.flatMap((node) => [node, ...node.children]);
+}
+
+/**
+ * 各来源渠道被多少条流水引用。
+ * 一级分类的数字**不含**其子级——父子各自统计，与设置页展示一致。
+ */
+export function sourceChannelUsage(): Record<number, number> {
+  const rows = db
+    .select({ id: viewRecord.sourceChannelId, value: sql<number>`count(*)` })
+    .from(viewRecord)
+    .groupBy(viewRecord.sourceChannelId)
+    .all();
+
+  const usage: Record<number, number> = {};
+  for (const row of rows) {
+    if (row.id != null) usage[row.id] = row.value;
+  }
   return usage;
 }
 
@@ -510,6 +568,12 @@ export type ViewRecordWithPlatform = ViewRecord & {
   platformColor: string | null;
   platformIcon: string | null;
   isDefaultPlatform: boolean;
+  /** 这次观看指定的来源渠道；未指定时全为 null */
+  sourceChannelName: string | null;
+  sourceChannelIcon: string | null;
+  sourceChannelColor: string | null;
+  /** 所选渠道的上级一级分类名。选中的本身就是一级时为 null */
+  sourceChannelParentName: string | null;
   /** 挂在这一次观看上的标签。标签属于流水，不跨刷次共享 */
   tags: Tag[];
 };
@@ -586,22 +650,42 @@ export function getWorkDetail(workId: number): WorkDetail | null {
   const defaultPlatform = getDefaultPlatform();
 
   const rows = db
-    .select({ record: viewRecord, platform })
+    .select({ record: viewRecord, platform, channel: sourceChannel })
     .from(viewRecord)
     .leftJoin(platform, eq(platform.id, viewRecord.platformId))
+    .leftJoin(sourceChannel, eq(sourceChannel.id, viewRecord.sourceChannelId))
     .where(eq(viewRecord.workId, workId))
     .orderBy(desc(viewRecord.watchIndex), asc(viewRecord.id))
     .all();
 
-  const baseRecords: ViewRecordWithPlatform[] = rows.map(({ record, platform: p }) => ({
-    ...record,
-    // 记录未指定平台时展示默认平台，且标注为「默认」
-    platformName: p?.name ?? defaultPlatform?.name ?? null,
-    platformColor: p?.color ?? defaultPlatform?.color ?? null,
-    platformIcon: p?.icon ?? defaultPlatform?.icon ?? null,
-    isDefaultPlatform: record.platformId == null,
-    tags: [],
-  }));
+  /*
+   * 二级渠道要顺带显示所属一级名（如「PT站点 › 彩虹岛」）。
+   * 渠道表只有几十行，一次性读出来建映射，比自连接省事也更好读。
+   */
+  const channelNameById = new Map(
+    db
+      .select({ id: sourceChannel.id, name: sourceChannel.name })
+      .from(sourceChannel)
+      .all()
+      .map((c) => [c.id, c.name]),
+  );
+
+  const baseRecords: ViewRecordWithPlatform[] = rows.map(
+    ({ record, platform: p, channel }) => ({
+      ...record,
+      // 记录未指定平台时展示默认平台，且标注为「默认」
+      platformName: p?.name ?? defaultPlatform?.name ?? null,
+      platformColor: p?.color ?? defaultPlatform?.color ?? null,
+      platformIcon: p?.icon ?? defaultPlatform?.icon ?? null,
+      isDefaultPlatform: record.platformId == null,
+      sourceChannelName: channel?.name ?? null,
+      sourceChannelIcon: channel?.iconData ?? null,
+      sourceChannelColor: channel?.color ?? null,
+      sourceChannelParentName:
+        channel?.parentId != null ? channelNameById.get(channel.parentId) ?? null : null,
+      tags: [],
+    }),
+  );
 
   // 标签按流水取：每条记录只带自己那一次的标签，互不混淆
   const tagRows = db

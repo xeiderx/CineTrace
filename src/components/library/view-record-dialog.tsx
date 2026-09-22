@@ -24,7 +24,9 @@ import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -37,11 +39,14 @@ import {
 import { parseManualFields } from "@/lib/watch-progress";
 import { WorkTagEditor } from "@/components/library/work-tag-editor";
 import type { Platform, Tag, ViewRecord } from "@/db/schema";
+import type { SourceChannelNode } from "@/lib/queries";
 
 /** 平台下拉的哨兵值：Radix Select 不接受空字符串作为 value */
 const USE_DEFAULT = "__default__";
 /** 季下拉的「未标记」哨兵值，parseInt 解析不出来，action 会落成 null */
 const NO_SEASON = "__none__";
+/** 来源渠道下拉的「未指定」哨兵值，同上由 action 落成 null */
+const NO_CHANNEL = "__no_channel__";
 
 /**
  * 新增 / 编辑一条观影流水。
@@ -58,6 +63,7 @@ export function ViewRecordDialog({
   seasons,
   record,
   allTags,
+  sourceChannels,
 }: {
   workId: number;
   mediaType: string;
@@ -69,6 +75,8 @@ export function ViewRecordDialog({
   record?: ViewRecord & { tags?: Tag[] };
   /** 全部标签，供选择区挑选；不传则不显示标签区 */
   allTags?: Tag[];
+  /** 来源渠道两级树，供片源下拉分组展示；不传则不显示该字段 */
+  sourceChannels?: SourceChannelNode[];
 }) {
   const isEdit = Boolean(record);
   const [open, setOpen] = useState(false);
@@ -232,6 +240,40 @@ export function ViewRecordDialog({
                       {p.name}
                       {p.isDefault ? "（默认）" : ""}
                     </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="sourceChannelId">来源渠道</Label>
+              <Select
+                name="sourceChannelId"
+                defaultValue={
+                  record?.sourceChannelId != null
+                    ? String(record.sourceChannelId)
+                    : NO_CHANNEL
+                }
+              >
+                <SelectTrigger id="sourceChannelId" className="h-8 w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NO_CHANNEL}>未指定</SelectItem>
+                  {sourceChannels?.map((node) => (
+                    // 一级分类本身也能选，因此每组里先放它自己，再列二级
+                    <SelectGroup key={node.id}>
+                      <SelectLabel>{node.name}</SelectLabel>
+                      <SelectItem value={String(node.id)}>
+                        {node.name}
+                        <span className="text-xs text-muted-foreground">（整个大类）</span>
+                      </SelectItem>
+                      {node.children.map((child) => (
+                        <SelectItem key={child.id} value={String(child.id)}>
+                          {child.name}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
                   ))}
                 </SelectContent>
               </Select>

@@ -5,6 +5,7 @@ import {
   collectionItem,
   platform,
   setting,
+  sourceChannel,
   tag,
   user,
   viewEpisode,
@@ -19,7 +20,7 @@ import { APP_VERSION } from "@/lib/version";
  * 备份与恢复。
  *
  * 只备份「用户自己的数据」——观影记录、作品的身份标识（豆瓣/TMDB id）、
- * 平台、标签、片单、设置与账号。作品的描述性元数据（海报、简介、时长、
+ * 平台、来源渠道、标签、片单、设置与账号。作品的描述性元数据（海报、简介、时长、
  * 分季结构等）刻意不备份：它们随时可以从 TMDB 重新拉取，且会过期，
  * 放进备份只会让文件臃肿。导入后按需用「补全元数据」按钮回填。
  */
@@ -30,8 +31,11 @@ export const BACKUP_FORMAT = "cinetrace-backup";
  * v2：标签挂载层级从「作品」下沉到「观影流水」，`workTags` 变为 `viewRecordTags`
  * （以 viewRecord 的 sourceKey 关联）。导入 v1 文件时会把作品级标签折算到
  * 该作品最新一条流水上，口径与迁移 0006 的存量回填一致。
+ * v3：新增来源渠道（`sourceChannels`），观影流水用 `sourceChannelName` +
+ * `sourceChannelParentName` 指向它。v2 及更早的文件没有这两段，
+ * 按「未指定来源渠道」处理。渠道图标也一并备份：它只存在数据库里。
  */
-export const BACKUP_VERSION = 2;
+export const BACKUP_VERSION = 3;
 
 /**
  * work 的身份与匹配层。海报、简介、时长、分季结构等描述性字段不入备份——
@@ -72,6 +76,27 @@ export type BackupViewRecord = {
    * 老备份文件没有这个字段，按「无锁定」处理，导入后同步会重新接管全部字段。
    */
   manualFieldsJson: string | null;
+  /**
+   * v3 起：这条流水的来源渠道名。一级分类名填在这里，二级时还带 parentName。
+   * v2 及更早的备份没有这两个字段，导入后为「未指定来源渠道」。
+   */
+  sourceChannelName?: string | null;
+  /** v3 起：所选渠道的上级一级分类名；选中的本身就是一级时为 null */
+  sourceChannelParentName?: string | null;
+};
+
+/**
+ * 来源渠道。层级用「一级名 → 二级名」的父子名表达，
+ * 二级名只在同一个一级下唯一（如「PT站点 › 天空」与「EMBY服 › 天空」是两条）。
+ * 图标是 data URL，只存在数据库里，因此连同备份一起走。
+ */
+export type BackupSourceChannel = {
+  name: string;
+  /** 上级一级分类名；为空即一级分类本身 */
+  parentName: string | null;
+  iconData: string | null;
+  color: string | null;
+  sortOrder: number;
 };
 
 /**
@@ -96,6 +121,8 @@ export type BackupFile = {
     users: { username: string; passwordHash: string; displayName: string | null }[];
     settings: { key: string; value: string }[];
     platforms: { name: string; icon: string | null; color: string | null; isDefault: boolean; sortOrder: number }[];
+    /** v3 起：来源渠道两级树，图标以 data URL 原样带上 */
+    sourceChannels: BackupSourceChannel[];
     tags: { name: string; color: string | null }[];
     works: BackupWork[];
     viewRecords: BackupViewRecord[];
@@ -120,6 +147,7 @@ export type ImportStats = {
   users: number;
   settings: number;
   platforms: number;
+  sourceChannels: number;
   tags: number;
   works: number;
   viewRecords: number;
@@ -194,6 +222,29 @@ export function exportBackup(): BackupFile {
     platformIdToName.set(row.id, row.name);
   }
 
+  /*
+   * 来源渠道：一次性读出来，既建 id → 记录 的映射供流水引用，
+   * 也用来把 parentId 翻成一级分类名（备份里不落自增 id）。
+   */
+  const channelRows = db.select().from(sourceChannel).all();
+  const channelById = new Map(channelRows.map((row) => [row.id, row]));
+  /** 渠道 id → 「一级名 / 二级名」。一级分类的 parentName 为 null */
+  const channelPathById = new Map<number, { name: string; parentName: string | null }>();
+  for (const row of channelRows) {
+    channelPathById.set(row.id, {
+      name: row.name,
+      parentName:
+        row.parentId != null ? channelById.get(row.parentId)?.name ?? null : null,
+    });
+  }
+  const sourceChannels: BackupSourceChannel[] = channelRows.map((row) => ({
+    name: row.name,
+    parentName: channelPathById.get(row.id)?.parentName ?? null,
+    iconData: row.iconData,
+    color: row.color,
+    sortOrder: row.sortOrder,
+  }));
+
   const tagIdToName = new Map<number, string>();
   for (const row of db.select({ id: tag.id, name: tag.name }).from(tag).all()) {
     tagIdToName.set(row.id, row.name);
@@ -226,6 +277,14 @@ export function exportBackup(): BackupFile {
       episodesWatched: row.episodesWatched,
       doubanRemovedAt: row.doubanRemovedAt?.toISOString() ?? null,
       manualFieldsJson: row.manualFieldsJson,
+      sourceChannelName:
+        row.sourceChannelId != null
+          ? channelPathById.get(row.sourceChannelId)?.name ?? null
+          : null,
+      sourceChannelParentName:
+        row.sourceChannelId != null
+          ? channelPathById.get(row.sourceChannelId)?.parentName ?? null
+          : null,
     }));
 
   /*
@@ -293,6 +352,7 @@ export function exportBackup(): BackupFile {
         .from(platform)
         .all(),
       tags: db.select({ name: tag.name, color: tag.color }).from(tag).all(),
+      sourceChannels,
       works,
       viewRecords,
       viewEpisodes,
@@ -342,6 +402,8 @@ export function parseBackupFile(raw: string): BackupFile {
       users: data.users ?? [],
       settings: data.settings ?? [],
       platforms: data.platforms ?? [],
+      /* v2 及更早的备份没有这一段，导入后来源渠道为空 */
+      sourceChannels: data.sourceChannels ?? [],
       tags: data.tags ?? [],
       works: data.works,
       viewRecords: data.viewRecords,
@@ -365,6 +427,7 @@ export function importBackup(file: BackupFile): ImportStats {
     users: 0,
     settings: 0,
     platforms: 0,
+    sourceChannels: 0,
     tags: 0,
     works: 0,
     viewRecords: 0,
@@ -432,6 +495,68 @@ export function importBackup(file: BackupFile): ImportStats {
     }
     for (const row of tx.select({ name: platform.name, id: platform.id }).from(platform).all()) {
       if (!platformIdByName.has(row.name)) platformIdByName.set(row.name, row.id);
+    }
+
+    /*
+     * 来源渠道：层级用父子名表达，因此要「先一级、后二级」处理，
+     * 否则二级找不到父级。引用键是「父级名 + 名字」，二级同名可以存在于不同一级下。
+     *
+     * (parentId, name) 唯一索引在 SQLite 里拦不住一级重名（NULL 互不相等），
+     * upsert 也没有可用的冲突目标，所以按父级 + 名字显式查一遍：
+     * 已存在就更新（图标、颜色、排序跟着备份走），不存在才插入。
+     */
+    const channelKeyOf = (parentName: string | null, name: string) =>
+      `${parentName ?? ""}\u0000${name}`;
+    const channelIdByKey = new Map<string, number>();
+
+    // 已有渠道先登记进映射，导入条目才能与之合并而不是插重
+    const existingChannels = tx.select().from(sourceChannel).all();
+    const existingChannelNameById = new Map(
+      existingChannels.map((row) => [row.id, row.name]),
+    );
+    for (const row of existingChannels) {
+      const parentName =
+        row.parentId != null ? existingChannelNameById.get(row.parentId) ?? null : null;
+      channelIdByKey.set(channelKeyOf(parentName, row.name), row.id);
+    }
+
+    const orderedChannels = [
+      ...d.sourceChannels.filter((row) => !row?.parentName),
+      ...d.sourceChannels.filter((row) => row?.parentName),
+    ];
+
+    for (const row of orderedChannels) {
+      const name = row?.name?.trim();
+      if (!name) continue;
+
+      const parentName = row.parentName?.trim() || null;
+      const parentId = parentName
+        ? channelIdByKey.get(channelKeyOf(null, parentName)) ?? null
+        : null;
+      // 二级找不到对应的一级分类就跳过，不造无所归属的孤儿渠道
+      if (parentName && parentId == null) continue;
+
+      const values = {
+        name,
+        parentId,
+        iconData: row.iconData ?? null,
+        color: row.color ?? null,
+        sortOrder: row.sortOrder ?? 0,
+      };
+
+      const key = channelKeyOf(parentName, name);
+      const existingId = channelIdByKey.get(key);
+      if (existingId != null) {
+        tx.update(sourceChannel).set(values).where(eq(sourceChannel.id, existingId)).run();
+      } else {
+        const saved = tx
+          .insert(sourceChannel)
+          .values(values)
+          .returning({ id: sourceChannel.id })
+          .get();
+        channelIdByKey.set(key, saved.id);
+      }
+      stats.sourceChannels += 1;
     }
 
     /* 标签 / 片单：同样按 name upsert */
