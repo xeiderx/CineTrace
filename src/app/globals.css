@@ -121,6 +121,23 @@
   size-adjust: 134.59%;
 }
 
+/*
+ * 刷次徽章大字的毛笔楷书（Ma Shan Zheng）。
+ *
+ * 只子集了「贰 叁 肆 伍 N」五个字，unicode-range 精确限定到这几个码位，
+ * 其它中文字符不会命中这份字体，正文排版不受影响。
+ * 「刷」字故意不用这份字体，走页面默认无衬线体，与毛笔笔锋形成对比。
+ * 字体自托管而非依赖 CDN，手机和电脑看到的字形完全一致。
+ */
+@font-face {
+  font-family: "Ma Shan Zheng";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/mashan-badge.woff2") format("woff2");
+  unicode-range: U+4E, U+4F0D, U+53C1, U+8086, U+8D30;
+}
+
 :root {
   /* 变量名与原先 next/font/google 一致，下游 @theme / body 无需改动 */
   --font-geist-sans: "Geist", "Geist Fallback";

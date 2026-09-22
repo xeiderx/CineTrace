@@ -131,7 +131,11 @@ export default async function LibraryPage({
                     className="block flex-1 space-y-2.5 rounded-xl outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
                   >
                     <div className="relative overflow-hidden rounded-lg ring-1 ring-foreground/10">
-                      <WorkPoster title={item.title} posterPath={item.posterPath} />
+                      <WorkPoster
+                        title={item.title}
+                        posterPath={item.posterPath}
+                        watchIndex={item.watchIndex}
+                      />
                       {item.latestRating ? (
                         <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-2 pb-1.5 pt-6">
                           <RatingStars value={item.latestRating} />
@@ -147,7 +151,6 @@ export default async function LibraryPage({
                         mediaType={item.mediaType}
                         year={item.year}
                         status={item.latestStatus}
-                        watchCount={item.watchCount}
                         country={parseStringList(item.countries)[0] ?? null}
                         removedCount={item.removedCount}
                       />

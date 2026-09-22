@@ -150,6 +150,7 @@ function WatchingCard({
           title={item.title}
           posterPath={item.posterPath}
           status={status}
+          watchIndex={item.watchIndex}
         />
       </Link>
 

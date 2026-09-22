@@ -223,10 +223,16 @@ export function listGenreFacets(): FacetItem[] {
 
 export type WorkListItem = Work & {
   viewCount: number;
-  watchCount: number;
   /**
-   * 状态为「看过」的记录条数。与 watchCount 的差别在于后者把「有看过日期」的也算进来
-   * （用户后来把状态改成想看、但那天确实看过的那笔）。档案库顶部的流水数用这一列，
+   * 刷到第几刷，取名下流水 `watchIndex` 的最大值；1 表示只看过一遍，0 条流水也是 1。
+   * 海报右上角的刷次徽章只在 ≥2 时出现。
+   *
+   * 不能拿流水条数当刷数：豆瓣按季建条目，一季一条流水，
+   * 多季剧会被算成多刷（早期版本就是这么错的，7 季的剧显示成「7 刷」）。
+   */
+  watchIndex: number;
+  /**
+   * 状态为「看过」的记录条数。档案库顶部的流水数用这一列，
    * 口径与豆瓣「看过」一致，才能和同步区的对照行对上。
    */
   watchedCount: number;
@@ -387,7 +393,7 @@ export function listWorks(filters: WorkFilters = {}): WorkListItem[] {
     return {
       ...w,
       viewCount: own.length,
-      watchCount: own.filter((r) => r.watchedAt != null || r.status === "watched").length,
+      watchIndex: own.reduce((max, r) => Math.max(max, r.watchIndex), 1),
       watchedCount: own.filter((r) => r.status === "watched").length,
       lastWatchedAt: latest?.watchedAt ?? null,
       latestStatus: latest?.status ?? null,

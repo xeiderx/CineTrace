@@ -333,6 +333,9 @@ export default async function WorkDetailPage({
   const isTv = item.mediaType === "tv";
 
   const latest = latestRecord(records);
+  // 刷次取下流水的最大 watchIndex，不能数流水条数：
+  // 豆瓣按季建条目，多季剧一季一条流水，按条数算会把季数当刷数（7 季剧显示成 7 刷）
+  const watchIndex = records.reduce((max, r) => Math.max(max, r.watchIndex), 1);
   // 整剧进度优先看逐集数据：它比 progressSeason/episodesWatched 这类手填列准
   const progressText = progress ? showProgressLabel(progress) : null;
   // 面板里的季切换、日期默认值都在客户端用，这里把服务端数据裁成纯值再下传
@@ -396,7 +399,11 @@ export default async function WorkDetailPage({
       <div className="flex flex-col gap-6 sm:flex-row">
         <div className="w-36 shrink-0 sm:w-48">
           <div className="overflow-hidden rounded-xl ring-1 ring-foreground/10">
-            <WorkPoster title={item.title} posterPath={item.posterPath} />
+            <WorkPoster
+              title={item.title}
+              posterPath={item.posterPath}
+              watchIndex={watchIndex}
+            />
           </div>
         </div>
 
@@ -412,7 +419,6 @@ export default async function WorkDetailPage({
               mediaType={item.mediaType}
               year={item.year}
               status={latest?.status ?? null}
-              watchCount={records.filter((r) => r.watchedAt != null || r.status === "watched").length}
               country={countries[0] ?? null}
               removedCount={records.filter((r) => r.doubanRemovedAt != null).length}
             />
