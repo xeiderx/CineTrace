@@ -12,6 +12,7 @@ import {
   type PanelSeason,
 } from "@/components/library/season-progress-panel";
 import { ViewRecordDialog } from "@/components/library/view-record-dialog";
+import { SourceChannelSelect } from "@/components/library/source-channel-select";
 import { WorkFormDialog } from "@/components/library/work-form-dialog";
 import { WorkMatchDialog } from "@/components/library/work-match-dialog";
 import { WorkTagEditor } from "@/components/library/work-tag-editor";
@@ -458,8 +459,17 @@ export default async function WorkDetailPage({
           <WorkMatchDialog workId={item.id} workTitle={item.title} />
           <WorkFormDialog
             work={item}
-            latestRecord={latest ? { id: latest.id, tags: latest.tags } : null}
+            latestRecord={
+              latest
+                ? {
+                    id: latest.id,
+                    tags: latest.tags,
+                    sourceChannelId: latest.sourceChannelId,
+                  }
+                : null
+            }
             allTags={allTags}
+            sourceChannels={sourceChannels}
           />
           <ConfirmDeleteButton
             action={deleteWorkAction}
@@ -500,18 +510,25 @@ export default async function WorkDetailPage({
             />
           </div>
 
-          {/* 顶部只放「最新一次观看」的标签：标签属于某一次观看，
-              历史各刷的标签在下方各自的流水上，避免互相矛盾的标签堆在一起。
+          {/* 顶部只放「最新一次观看」的标签与来源渠道：两者都挂在某一次观看上，
+              历史各刷的记在下方各自的流水上，避免互相矛盾的信息堆在一起。
               还没有任何流水时无处可挂，只提示去记一次观看。 */}
           {latest ? (
-            <WorkTagEditor
-              viewRecordId={latest.id}
-              attached={latest.tags}
-              allTags={allTags}
-            />
+            <div className="flex flex-wrap items-center gap-2">
+              <WorkTagEditor
+                viewRecordId={latest.id}
+                attached={latest.tags}
+                allTags={allTags}
+              />
+              <SourceChannelSelect
+                viewRecordId={latest.id}
+                current={latest.sourceChannelId}
+                sourceChannels={sourceChannels}
+              />
+            </div>
           ) : (
             <p className="text-xs text-muted-foreground">
-              还没有观影记录，标签需要挂在某一次观看上。
+              还没有观影记录，标签与来源渠道都要挂在某一次观看上。
             </p>
           )}
 

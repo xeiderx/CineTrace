@@ -718,6 +718,28 @@ export async function detachTagAction(formData: FormData): Promise<void> {
   refreshLibrary(viewRecordWorkId(viewRecordId));
 }
 
+/**
+ * 只改某条流水的来源渠道。
+ *
+ * 详情页顶部与编辑弹窗里的来源渠道都作用于「最新一次观看」，那里的流水
+ * 已经存在，没必要走 updateViewRecordAction 整表回填一遍——那条路径会重算
+ * 手动锁定字段、还会顺带覆盖状态与日期，改动面太大。
+ *
+ * 表单里传 NO_CHANNEL 哨兵时 int() 得到 null，正好表示「未指定」。
+ */
+export async function updateRecordSourceChannelAction(
+  formData: FormData,
+): Promise<void> {
+  const viewRecordId = int(formData, "viewRecordId");
+  if (viewRecordId == null) return;
+
+  db.update(viewRecord)
+    .set({ sourceChannelId: int(formData, "sourceChannelId") })
+    .where(eq(viewRecord.id, viewRecordId))
+    .run();
+  refreshLibrary(viewRecordWorkId(viewRecordId));
+}
+
 /* -------------------------------------------------------------------------- */
 /*                                 观影记录管理                                 */
 /* -------------------------------------------------------------------------- */

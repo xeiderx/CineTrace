@@ -28,7 +28,9 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { WorkTagEditor } from "@/components/library/work-tag-editor";
+import { SourceChannelSelect } from "@/components/library/source-channel-select";
 import { MEDIA_TYPE_LABELS, parseCast } from "@/lib/labels";
+import type { SourceChannelNode } from "@/lib/queries";
 import type { Tag, Work } from "@/db/schema";
 
 /** 把 JSON 数组列还原成逗号分隔文本，供表单编辑 */
@@ -60,18 +62,25 @@ export function WorkFormDialog({
   work,
   latestRecord,
   allTags,
+  sourceChannels,
   open: controlledOpen,
   onOpenChange,
   showTrigger = true,
 }: {
   work?: Work;
   /**
-   * 最新一次观看的流水（含它自己的标签）。标签挂在流水上，
-   * 编辑作品时能改的只有这一次的标签；一条流水都没有就没地方挂，引导去记一次观看。
+   * 最新一次观看的流水（含它自己的标签与来源渠道）。标签与来源渠道都挂在流水上，
+   * 编辑作品时能改的只有这一次；一条流水都没有就没地方挂，引导去记一次观看。
    */
-  latestRecord?: { id: number; tags: Tag[] } | null;
+  latestRecord?: {
+    id: number;
+    tags: Tag[];
+    sourceChannelId: number | null;
+  } | null;
   /** 全部标签，供选择区挑选 */
   allTags?: Tag[];
+  /** 来源渠道两级树，供来源渠道下拉挑选 */
+  sourceChannels?: SourceChannelNode[];
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   showTrigger?: boolean;
@@ -332,6 +341,30 @@ export function WorkFormDialog({
                 ) : (
                   <p className="text-xs text-muted-foreground">
                     还没有观影记录，标签需要挂在某一次观看上。先记一次观看再回来打标签。
+                  </p>
+                )}
+              </div>
+            ) : null}
+
+            {/* 来源渠道与标签同属「某一次观看」，因此同样只改最新那条流水。
+                选中即提交，不参与本表单的保存动作。 */}
+            {isEdit && work && sourceChannels ? (
+              <div className="space-y-2 sm:col-span-2">
+                <Label>来源渠道</Label>
+                {latestRecord ? (
+                  <>
+                    <SourceChannelSelect
+                      viewRecordId={latestRecord.id}
+                      current={latestRecord.sourceChannelId}
+                      sourceChannels={sourceChannels}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      来源渠道记在最新一次观看上。想看以前的刷次，去下方的观影记录里改。
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    还没有观影记录，来源渠道需要挂在某一次观看上。先记一次观看再回来选。
                   </p>
                 )}
               </div>
