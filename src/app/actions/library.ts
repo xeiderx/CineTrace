@@ -7,6 +7,7 @@ import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   collectionItem,
+  iconLibrary,
   person,
   platform,
   sourceChannel,
@@ -18,6 +19,7 @@ import {
   type Person,
   type ViewRecord,
 } from "@/db/schema";
+import { invalidateIconLibraryCache } from "@/lib/icon-library";
 import {
   getDefaultPlatform,
   listWorksByCastId,
@@ -1254,9 +1256,20 @@ export async function savePlatformAction(
   const name = required(formData, "name");
   if (!name) return { error: "请填写平台名称" };
 
+  // 图标可以是内置图标名，也可以是上传/从图标库选来的 data URL，后者要跟渠道同样兜底
+  const iconRaw = text(formData, "icon");
+  if (iconRaw?.startsWith("data:")) {
+    if (!ICON_DATA_PATTERN.test(iconRaw)) {
+      return { error: "图片格式不支持，请重新选择 PNG / JPEG / WebP / SVG 图片" };
+    }
+    if (iconRaw.length > ICON_DATA_MAX_LENGTH) {
+      return { error: "图片体积过大，请换一张更小的图片" };
+    }
+  }
+
   const values = {
     name,
-    icon: text(formData, "icon"),
+    icon: iconRaw,
     color: text(formData, "color"),
     sortOrder: int(formData, "sortOrder") ?? 0,
   };
@@ -1501,4 +1514,62 @@ export async function deleteSourceChannelAction(formData: FormData): Promise<voi
 
   revalidatePath("/settings");
   revalidatePath("/library");
+}
+
+/* -------------------------------------------------------------------------- */
+/*                                  图标库                                     */
+/* -------------------------------------------------------------------------- */
+
+/** 图标库地址只允许 http(s)，防止填成 file:// 之类让服务端去读本地文件 */
+const LIBRARY_URL_PATTERN = /^https?:\/\/.+/i;
+
+/**
+ * 新建 / 编辑图标库。
+ *
+ * 只存名字与地址，不落地任何图标：库里几百条图标、总量几十 MB，
+ * 全量抓下来既慢又没必要。用户在选图标时按需走代理取那一张。
+ */
+export async function saveIconLibraryAction(
+  _prev: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const id = int(formData, "id");
+  const name = required(formData, "name");
+  const url = required(formData, "url");
+  if (!name) return { error: "请填写图标库名称" };
+  if (name.length > 60) return { error: "图标库名称不超过 60 个字" };
+  if (!url) return { error: "请填写图标库地址" };
+  if (!LIBRARY_URL_PATTERN.test(url)) return { error: "地址需以 http:// 或 https:// 开头" };
+
+  // 名字与地址都是唯一索引，先查重以给出可比索引报错更清楚的提示
+  const sameName = db.select().from(iconLibrary).where(eq(iconLibrary.name, name)).get();
+  if (sameName && sameName.id !== id) return { error: "同名图标库已存在" };
+  const sameUrl = db.select().from(iconLibrary).where(eq(iconLibrary.url, url)).get();
+  if (sameUrl && sameUrl.id !== id) return { error: "该地址已存在" };
+
+  const values = {
+    name,
+    url,
+    sortOrder: int(formData, "sortOrder") ?? 0,
+  };
+
+  if (id == null) {
+    db.insert(iconLibrary).values(values).run();
+  } else {
+    db.update(iconLibrary).set(values).where(eq(iconLibrary.id, id)).run();
+    // 地址或名字改过，缓存里的旧内容不再对应
+    invalidateIconLibraryCache(id);
+  }
+
+  revalidatePath("/settings");
+  return { ok: true };
+}
+
+export async function deleteIconLibraryAction(formData: FormData): Promise<void> {
+  const id = int(formData, "id");
+  if (id == null) return;
+
+  invalidateIconLibraryCache(id);
+  db.delete(iconLibrary).where(eq(iconLibrary.id, id)).run();
+  revalidatePath("/settings");
 }

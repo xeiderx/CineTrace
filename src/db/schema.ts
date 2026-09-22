@@ -352,7 +352,12 @@ export const platform = sqliteTable(
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
     name: text("name").notNull().unique(),
-    /** lucide 图标名，前端映射为图标组件 */
+    /**
+     * 平台图标。两种形态二选一：
+     * - lucide 图标名（如 `monitor-play`），前端映射成图标组件；
+     * - 图片 data URL（形如 `data:image/png;base64,...`），从图标库或本地上传而来。
+     * 前端按前缀区分，见 `PlatformIcon`。
+     */
     icon: text("icon"),
     /** 品牌色，如 '#00b020'，用于图表与徽标 */
     color: text("color"),
@@ -410,6 +415,36 @@ export const sourceChannel = sqliteTable(
     uniqueIndex("source_channel_parent_name_uniq").on(t.parentId, t.name),
     index("source_channel_parent_idx").on(t.parentId),
   ],
+);
+
+/* -------------------------------------------------------------------------- */
+/*                              图标库（外部 JSON）                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * 图标库：一份放在公网的 JSON，里面是一组「图标名 + 图片地址」。
+ *
+ * 只存地址不存图标：库里动辄几百条图标、总量几十 MB，全量抓下来既慢又没必要；
+ * 用户在选图标时按需通过服务端代理取那一张，压缩成 data URL 后落到
+ * source_channel.icon_data / platform.icon 里。因此这份 JSON 挂掉也不影响已选图标。
+ *
+ * 图片地址指向 raw.githubusercontent.com 之类的外网，浏览器直连常被墙，
+ * 故取 JSON 与取图都走服务端代理（见 /api/icon-libraries）。
+ */
+export const iconLibrary = sqliteTable(
+  "icon_library",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    /** 展示名，列表里用来选库 */
+    name: text("name").notNull().unique(),
+    /** 图标库 JSON 的地址 */
+    url: text("url").notNull().unique(),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (t) => [index("icon_library_sort_idx").on(t.sortOrder)],
 );
 
 /* -------------------------------------------------------------------------- */
@@ -697,6 +732,8 @@ export type NewViewEpisode = typeof viewEpisode.$inferInsert;
 export type Platform = typeof platform.$inferSelect;
 export type SourceChannel = typeof sourceChannel.$inferSelect;
 export type NewSourceChannel = typeof sourceChannel.$inferInsert;
+export type IconLibrary = typeof iconLibrary.$inferSelect;
+export type NewIconLibrary = typeof iconLibrary.$inferInsert;
 export type Tag = typeof tag.$inferSelect;
 export type Collection = typeof collection.$inferSelect;
 export type CollectionItem = typeof collectionItem.$inferSelect;

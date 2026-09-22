@@ -51,6 +51,7 @@ export async function importBackupAction(
       `逐集进度 ${stats.viewEpisodes}`,
       `平台 ${stats.platforms}`,
       `来源渠道 ${stats.sourceChannels}`,
+      `图标库 ${stats.iconLibraries}`,
       `标签 ${stats.tags}`,
       `片单 ${stats.collections}`,
       `设置 ${stats.settings}`,

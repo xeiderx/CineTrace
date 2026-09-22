@@ -62,6 +62,37 @@ export const DEFAULT_SOURCE_CHANNELS: DefaultSourceChannel[] = [
   { name: "EMBY服", color: "#9b7bd5", sortOrder: 2, children: [] },
 ];
 
+/**
+ * 预置图标库。
+ *
+ * 都是别人维护的 Emby / Fileball 图标 JSON，结构与字段一致
+ * （`{ name, description, icons: [{ name, url }] }`），用户可以自行增删。
+ * 图片全在 raw.githubusercontent.com 上，浏览器直连不一定通，
+ * 取 JSON 与取图都走服务端代理。
+ */
+export const DEFAULT_ICON_LIBRARIES = [
+  {
+    name: "离歌Emby专用",
+    url: "https://raw.githubusercontent.com/lige47/QuanX-icon-rule/refs/heads/main/lige-emby-icon.json",
+  },
+  {
+    name: "恩秀Emby图标库",
+    url: "https://raw.githubusercontent.com/sooyaaabo/IconLibrary/main/Emby-Icon.json",
+  },
+  {
+    name: "Emby图标库(圆)@baiitang",
+    url: "https://raw.githubusercontent.com/baiitang/Sakura/main/Fileball/Yuan/tubiao.json",
+  },
+  {
+    name: "Emby图标库(方)@baiitang",
+    url: "https://raw.githubusercontent.com/baiitang/Sakura/main/Fileball/Fang/tubiao.json",
+  },
+  {
+    name: "五芙临门 · Emby透明图标库",
+    url: "https://raw.githubusercontent.com/xiyuliu509/Player-Icon/refs/heads/master/invisible.json",
+  },
+] as const;
+
 /** 预置应用设置。key 用点分命名空间，值与前端表单一一对应。 */
 export const DEFAULT_SETTINGS = {
   "douban.uid": "",

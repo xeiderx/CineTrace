@@ -3,6 +3,7 @@ import { db } from "@/db";
 import {
   collection,
   collectionItem,
+  iconLibrary,
   platform,
   setting,
   sourceChannel,
@@ -34,8 +35,11 @@ export const BACKUP_FORMAT = "cinetrace-backup";
  * v3：新增来源渠道（`sourceChannels`），观影流水用 `sourceChannelName` +
  * `sourceChannelParentName` 指向它。v2 及更早的文件没有这两段，
  * 按「未指定来源渠道」处理。渠道图标也一并备份：它只存在数据库里。
+ * v4：新增图标库（`iconLibraries`），平台与渠道从图标库选的图会在选定时
+ * 就压成 data URL 存进各自表里，因此这里只需要带上库名与地址。
+ * v3 及更早的文件没有这一段，导入后图标库为空，用户可在设置里补。
  */
-export const BACKUP_VERSION = 3;
+export const BACKUP_VERSION = 4;
 
 /**
  * work 的身份与匹配层。海报、简介、时长、分季结构等描述性字段不入备份——
@@ -112,6 +116,16 @@ export type BackupViewEpisode = {
   watchedAt: string | null;
 };
 
+/**
+ * 图标库。只存名字与地址：图标本身在选定时已压成 data URL 落到平台/渠道表里，
+ * 备份它们没有意义（远端库随时可以重拉）。
+ */
+export type BackupIconLibrary = {
+  name: string;
+  url: string;
+  sortOrder: number;
+};
+
 export type BackupFile = {
   format: typeof BACKUP_FORMAT;
   version: number;
@@ -123,6 +137,8 @@ export type BackupFile = {
     platforms: { name: string; icon: string | null; color: string | null; isDefault: boolean; sortOrder: number }[];
     /** v3 起：来源渠道两级树，图标以 data URL 原样带上 */
     sourceChannels: BackupSourceChannel[];
+    /** v4 起：图标库清单，只有名字与地址 */
+    iconLibraries: BackupIconLibrary[];
     tags: { name: string; color: string | null }[];
     works: BackupWork[];
     viewRecords: BackupViewRecord[];
@@ -148,6 +164,7 @@ export type ImportStats = {
   settings: number;
   platforms: number;
   sourceChannels: number;
+  iconLibraries: number;
   tags: number;
   works: number;
   viewRecords: number;
@@ -353,6 +370,10 @@ export function exportBackup(): BackupFile {
         .all(),
       tags: db.select({ name: tag.name, color: tag.color }).from(tag).all(),
       sourceChannels,
+      iconLibraries: db
+        .select({ name: iconLibrary.name, url: iconLibrary.url, sortOrder: iconLibrary.sortOrder })
+        .from(iconLibrary)
+        .all(),
       works,
       viewRecords,
       viewEpisodes,
@@ -404,6 +425,8 @@ export function parseBackupFile(raw: string): BackupFile {
       platforms: data.platforms ?? [],
       /* v2 及更早的备份没有这一段，导入后来源渠道为空 */
       sourceChannels: data.sourceChannels ?? [],
+      /* v3 及更早的备份没有这一段，导入后图标库为空，用户可在设置里补 */
+      iconLibraries: data.iconLibraries ?? [],
       tags: data.tags ?? [],
       works: data.works,
       viewRecords: data.viewRecords,
@@ -428,6 +451,7 @@ export function importBackup(file: BackupFile): ImportStats {
     settings: 0,
     platforms: 0,
     sourceChannels: 0,
+    iconLibraries: 0,
     tags: 0,
     works: 0,
     viewRecords: 0,
@@ -557,6 +581,29 @@ export function importBackup(file: BackupFile): ImportStats {
         channelIdByKey.set(key, saved.id);
       }
       stats.sourceChannels += 1;
+    }
+
+    /*
+     * 图标库：name 与 url 都是唯一索引，单靠 name 做 upsert 会在
+     * 「本地改过名字、地址没变」时撞 url 唯一约束，所以按 name 或 url 查一遍：
+     * 命中就更新（名字、地址、排序都跟着备份走），没有才插入。
+     */
+    for (const row of d.iconLibraries) {
+      const name = row?.name?.trim();
+      const url = row?.url?.trim();
+      if (!name || !url) continue;
+      const existing = tx
+        .select({ id: iconLibrary.id })
+        .from(iconLibrary)
+        .where(or(eq(iconLibrary.name, name), eq(iconLibrary.url, url)))
+        .get();
+      const values = { name, url, sortOrder: row.sortOrder ?? 0 };
+      if (existing) {
+        tx.update(iconLibrary).set(values).where(eq(iconLibrary.id, existing.id)).run();
+      } else {
+        tx.insert(iconLibrary).values(values).run();
+      }
+      stats.iconLibraries += 1;
     }
 
     /* 标签 / 片单：同样按 name upsert */

@@ -10,6 +10,11 @@ const nextConfig: NextConfig = {
   env: {
     NEXT_PUBLIC_APP_VERSION: pkg.version,
   },
+  /**
+   * 开发时用 127.0.0.1 访问会被当成跨源请求，HMR 与客户端脚本被拦掉导致页面不水合，
+   * 表现为整页点了没反应，这里把本机地址放行。
+   */
+  allowedDevOrigins: ["127.0.0.1", "localhost"],
   experimental: {
     serverActions: {
       /**

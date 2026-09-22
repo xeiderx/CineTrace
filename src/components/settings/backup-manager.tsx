@@ -93,7 +93,7 @@ export function BackupManager({ pendingMetadata }: Props) {
       <div>
         <h2 className="text-base font-medium">备份与恢复</h2>
         <p className="text-xs text-muted-foreground">
-          导出观影记录、作品匹配关系、平台、标签、片单与设置。
+          导出观影记录、作品匹配关系、平台、来源渠道、图标库、标签、片单与设置。
           海报、简介等 TMDB 元数据不在备份里——它们可以随时重新拉取。
         </p>
       </div>

@@ -1,8 +1,9 @@
 import { randomInt } from "node:crypto";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "./index";
-import { platform, setting, sourceChannel, user } from "./schema";
+import { iconLibrary, platform, setting, sourceChannel, user } from "./schema";
 import {
+  DEFAULT_ICON_LIBRARIES,
   DEFAULT_PLATFORMS,
   DEFAULT_SETTINGS,
   DEFAULT_SOURCE_CHANNELS,
@@ -117,6 +118,14 @@ async function seed() {
     }
   }
   console.log(`来源渠道：${channelCount} 个分类已就绪`);
+
+  for (const [index, lib] of DEFAULT_ICON_LIBRARIES.entries()) {
+    const exists = db.select().from(iconLibrary).where(eq(iconLibrary.url, lib.url)).get();
+    if (!exists) {
+      db.insert(iconLibrary).values({ name: lib.name, url: lib.url, sortOrder: index }).run();
+    }
+  }
+  console.log(`图标库：${DEFAULT_ICON_LIBRARIES.length} 项已就绪`);
 
   for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
     const exists = db.select().from(setting).where(eq(setting.key, key)).get();

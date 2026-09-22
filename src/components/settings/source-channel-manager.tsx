@@ -1,13 +1,17 @@
 "use client";
 
-import { useActionState, useId, useRef, useState } from "react";
-import { CornerDownRight, ImageUp, Layers, Pencil, Plus, X } from "lucide-react";
+import { useActionState, useId, useState } from "react";
+import { CornerDownRight, Layers, Pencil, Plus } from "lucide-react";
 import {
   deleteSourceChannelAction,
   saveSourceChannelAction,
   type FormState,
 } from "@/app/actions/library";
 import { ConfirmDeleteButton } from "@/components/library/confirm-delete-button";
+import {
+  IconField,
+  type IconLibraryOption,
+} from "@/components/settings/icon-field";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -23,40 +27,9 @@ import { Label } from "@/components/ui/label";
 import type { SourceChannel } from "@/db/schema";
 import type { SourceChannelNode } from "@/lib/queries";
 
-/** 原始文件上限。图片会在浏览器里先压缩，超过这个大小说明选错了文件 */
-const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
-/** 压缩后图标的长边像素。列表里按 32px 显示，128px 已经够清晰 */
-const ICON_MAX_EDGE = 128;
 /** 原生取色器只认 #rrggbb，库里存着别的写法时先回落到中性色，避免显示成纯黑 */
 const COLOR_INPUT_FALLBACK = "#5b9bd5";
 const HEX_COLOR = /^#[0-9a-f]{6}$/i;
-
-/**
- * 把选中的图片压成 data URL。
- *
- * 存库而非落盘：public/ 在 Docker 镜像是只读层，容器重建就被覆盖；
- * 压到 128px 长边后典型体积 10-30KB，随 JSON 备份一起导出也不至于爆掉。
- */
-async function compressToDataUrl(file: File): Promise<string> {
-  const bitmap = await createImageBitmap(file);
-  try {
-    const scale = Math.min(1, ICON_MAX_EDGE / Math.max(bitmap.width, bitmap.height));
-    const width = Math.max(1, Math.round(bitmap.width * scale));
-    const height = Math.max(1, Math.round(bitmap.height * scale));
-
-    const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    const context = canvas.getContext("2d");
-    if (!context) throw new Error("当前浏览器不支持 Canvas 2D");
-    context.drawImage(bitmap, 0, 0, width, height);
-
-    // 用 PNG 保留透明背景，站点图标多为透明底
-    return canvas.toDataURL("image/png");
-  } finally {
-    bitmap.close();
-  }
-}
 
 /** 渠道图标：有图显示图，没图按层级显示不同的占位图标 */
 function ChannelIcon({ item }: { item: SourceChannel }) {
@@ -85,98 +58,6 @@ function ChannelIcon({ item }: { item: SourceChannel }) {
   );
 }
 
-/** 图标选择：本地压缩成 data URL 后塞进 hidden 字段，跟普通表单一起提交 */
-function ChannelIconField({ initial }: { initial: string | null }) {
-  const [iconData, setIconData] = useState(initial ?? "");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
-  const inputId = useId();
-
-  async function handleFile(file: File | undefined) {
-    if (!file) return;
-    setError(null);
-
-    if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
-      setError("只支持 PNG / JPEG / WebP 图片");
-      return;
-    }
-    if (file.size > MAX_UPLOAD_BYTES) {
-      setError("图片不超过 5MB");
-      return;
-    }
-
-    setBusy(true);
-    try {
-      setIconData(await compressToDataUrl(file));
-    } catch {
-      setError("图片处理失败，换一张再试");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="space-y-2">
-      <Label htmlFor={inputId}>图标图片</Label>
-
-      <div className="flex items-center gap-3">
-        <span className="flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted ring-1 ring-foreground/10">
-          {iconData ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={iconData} alt="" className="size-full object-contain" />
-          ) : (
-            <ImageUp className="size-5 text-muted-foreground" />
-          )}
-        </span>
-
-        <div className="flex items-center gap-1">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={busy}
-            onClick={() => fileRef.current?.click()}
-          >
-            {busy ? "处理中…" : iconData ? "更换图片" : "选择图片"}
-          </Button>
-          {iconData ? (
-            <Button type="button" variant="ghost" size="sm" onClick={() => setIconData("")}>
-              <X />
-              移除
-            </Button>
-          ) : null}
-        </div>
-      </div>
-
-      <p className="text-xs text-muted-foreground">
-        可选 PNG / JPEG / WebP，会自动压缩到 {ICON_MAX_EDGE}px 后存入数据库。
-      </p>
-
-      {error ? (
-        <p role="alert" className="text-xs text-destructive">
-          {error}
-        </p>
-      ) : null}
-
-      <input
-        ref={fileRef}
-        id={inputId}
-        type="file"
-        accept="image/png,image/jpeg,image/webp"
-        className="sr-only"
-        onChange={(event) => {
-          const file = event.target.files?.[0];
-          // 立刻清空，否则连着选同一个文件不会再触发 change
-          event.target.value = "";
-          void handleFile(file);
-        }}
-      />
-      <input type="hidden" name="iconData" value={iconData} />
-    </div>
-  );
-}
-
 /**
  * 新建 / 编辑来源渠道。
  *
@@ -186,9 +67,11 @@ function ChannelIconField({ initial }: { initial: string | null }) {
 function SourceChannelFormDialog({
   item,
   parent,
+  libraries,
 }: {
   item?: SourceChannel;
   parent?: SourceChannel;
+  libraries: IconLibraryOption[];
 }) {
   const isEdit = Boolean(item);
   const [open, setOpen] = useState(false);
@@ -259,7 +142,12 @@ function SourceChannelFormDialog({
             />
           </div>
 
-          <ChannelIconField initial={item?.iconData ?? null} />
+          <IconField
+            name="iconData"
+            initial={item?.iconData ?? null}
+            label="图标图片"
+            libraries={libraries}
+          />
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
@@ -327,9 +215,11 @@ function SourceChannelFormDialog({
 function ChildRow({
   item,
   usage,
+  libraries,
 }: {
   item: SourceChannel;
   usage: Record<number, number>;
+  libraries: IconLibraryOption[];
 }) {
   const count = usage[item.id] ?? 0;
 
@@ -345,7 +235,7 @@ function ChildRow({
       </div>
 
       <div className="flex shrink-0 items-center gap-1">
-        <SourceChannelFormDialog item={item} />
+        <SourceChannelFormDialog item={item} libraries={libraries} />
         <ConfirmDeleteButton
           action={deleteSourceChannelAction}
           id={item.id}
@@ -365,9 +255,11 @@ function ChildRow({
 export function SourceChannelManager({
   channels,
   usage,
+  libraries,
 }: {
   channels: SourceChannelNode[];
   usage: Record<number, number>;
+  libraries: IconLibraryOption[];
 }) {
   return (
     <div className="space-y-3">
@@ -378,7 +270,7 @@ export function SourceChannelManager({
             记录片源从哪来，分两级：一级是渠道大类，二级是具体站点或服务。
           </p>
         </div>
-        <SourceChannelFormDialog />
+        <SourceChannelFormDialog libraries={libraries} />
       </div>
 
       {channels.length === 0 ? (
@@ -413,8 +305,8 @@ export function SourceChannelManager({
                   </div>
 
                   <div className="flex shrink-0 items-center gap-1">
-                    <SourceChannelFormDialog parent={node} />
-                    <SourceChannelFormDialog item={node} />
+                    <SourceChannelFormDialog parent={node} libraries={libraries} />
+                    <SourceChannelFormDialog item={node} libraries={libraries} />
                     <ConfirmDeleteButton
                       action={deleteSourceChannelAction}
                       id={node.id}
@@ -441,7 +333,7 @@ export function SourceChannelManager({
                 ) : (
                   <ul className="divide-y divide-border/60">
                     {node.children.map((child) => (
-                      <ChildRow key={child.id} item={child} usage={usage} />
+                      <ChildRow key={child.id} item={child} usage={usage} libraries={libraries} />
                     ))}
                   </ul>
                 )}

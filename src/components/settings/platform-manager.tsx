@@ -20,6 +20,10 @@ import {
   type FormState,
 } from "@/app/actions/library";
 import { ConfirmDeleteButton } from "@/components/library/confirm-delete-button";
+import {
+  IconField,
+  type IconLibraryOption,
+} from "@/components/settings/icon-field";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -33,6 +37,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { Platform } from "@/db/schema";
+import { cn } from "@/lib/utils";
 
 /** 平台图标名到组件的映射。用户可填的名字有限，未收录时退化为圆点。 */
 const ICONS: Record<string, LucideIcon> = {
@@ -44,12 +49,35 @@ const ICONS: Record<string, LucideIcon> = {
   circle: Circle,
 };
 
-export function platformIcon(name: string | null): LucideIcon {
-  return (name && ICONS[name]) || Circle;
+/** 内置图标名清单，供 IconField 一键选中 */
+const ICON_NAMES = Object.keys(ICONS);
+
+/**
+ * 平台图标。
+ *
+ * `platform.icon` 有两种写法：内置图标名（lucide）或从图标库选来的 data URL。
+ * 按前缀区分，图片直接画 `<img>`，其余按名字查内置图标。
+ */
+function PlatformGlyph({ icon, className }: { icon: string | null; className?: string }) {
+  if (icon?.startsWith("data:")) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img src={icon} alt="" className={cn("object-contain", className)} />
+    );
+  }
+
+  const Icon = (icon && ICONS[icon]) || Circle;
+  return <Icon className={className} />;
 }
 
 /** 新建 / 编辑观影平台。默认平台由列表里的星标切换，不在表单里选。 */
-function PlatformFormDialog({ item }: { item?: Platform }) {
+function PlatformFormDialog({
+  item,
+  libraries,
+}: {
+  item?: Platform;
+  libraries: IconLibraryOption[];
+}) {
   const isEdit = Boolean(item);
   const [open, setOpen] = useState(false);
   const [state, formAction, pending] = useActionState<FormState, FormData>(
@@ -102,20 +130,17 @@ function PlatformFormDialog({ item }: { item?: Platform }) {
             />
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-2">
-              <Label htmlFor="icon">图标名</Label>
-              <Input
-                id="icon"
-                name="icon"
-                defaultValue={item?.icon ?? ""}
-                placeholder="monitor-play"
-              />
-              <p className="text-xs text-muted-foreground">
-                可用：monitor-play / laptop / smartphone / clapperboard / tv
-              </p>
-            </div>
+          <IconField
+            name="icon"
+            initial={item?.icon ?? null}
+            label="平台图标"
+            hint="可选内置图标，也可以用上传的图片或从图标库选择，会自动压缩到 128px 后存入数据库。"
+            libraries={libraries}
+            namedIcons={ICON_NAMES}
+            renderValue={(value) => <PlatformGlyph icon={value} className="size-4" />}
+          />
 
+          <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="color">标识色</Label>
               <Input
@@ -126,17 +151,17 @@ function PlatformFormDialog({ item }: { item?: Platform }) {
                 className="h-8 w-full p-1"
               />
             </div>
-          </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="sortOrder">排序值</Label>
-            <Input
-              id="sortOrder"
-              name="sortOrder"
-              type="number"
-              defaultValue={item?.sortOrder ?? 0}
-              placeholder="越小越靠前"
-            />
+            <div className="space-y-2">
+              <Label htmlFor="sortOrder">排序值</Label>
+              <Input
+                id="sortOrder"
+                name="sortOrder"
+                type="number"
+                defaultValue={item?.sortOrder ?? 0}
+                placeholder="越小越靠前"
+              />
+            </div>
           </div>
 
           {state?.error ? (
@@ -186,9 +211,11 @@ function SetDefaultButton({ id }: { id: number }) {
 export function PlatformManager({
   platforms,
   usage,
+  libraries,
 }: {
   platforms: Platform[];
   usage: Record<number, number>;
+  libraries: IconLibraryOption[];
 }) {
   return (
     <div className="space-y-3">
@@ -199,7 +226,7 @@ export function PlatformManager({
             带星标的是默认平台，未单独指定平台的观影记录都归到它。
           </p>
         </div>
-        <PlatformFormDialog />
+        <PlatformFormDialog libraries={libraries} />
       </div>
 
       {platforms.length === 0 ? (
@@ -209,7 +236,6 @@ export function PlatformManager({
       ) : (
         <ul className="divide-y divide-border/60 overflow-hidden rounded-xl bg-card ring-1 ring-foreground/10">
           {platforms.map((item) => {
-            const Icon = platformIcon(item.icon);
             const count = usage[item.id] ?? 0;
             return (
               <li
@@ -220,7 +246,7 @@ export function PlatformManager({
                   className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted"
                   style={item.color ? { color: item.color } : undefined}
                 >
-                  <Icon className="size-4" />
+                  <PlatformGlyph icon={item.icon} className="size-4" />
                 </span>
 
                 <div className="min-w-0 flex-1">
@@ -240,7 +266,7 @@ export function PlatformManager({
 
                 <div className="flex shrink-0 items-center gap-1">
                   {item.isDefault ? null : <SetDefaultButton id={item.id} />}
-                  <PlatformFormDialog item={item} />
+                  <PlatformFormDialog item={item} libraries={libraries} />
                   <ConfirmDeleteButton
                     action={deletePlatformAction}
                     id={item.id}

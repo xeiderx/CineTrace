@@ -15,6 +15,7 @@ import {
 import type { AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 import { db } from "@/db";
 import {
+  iconLibrary,
   platform,
   sourceChannel,
   tag,
@@ -22,6 +23,7 @@ import {
   viewRecord,
   viewRecordTag,
   work,
+  type IconLibrary,
   type Platform,
   type SourceChannel,
   type Tag,
@@ -81,6 +83,15 @@ export function getDefaultPlatform(): Platform | null {
 
 export function listTags(): Tag[] {
   return db.select().from(tag).orderBy(asc(tag.name)).all();
+}
+
+/** 图标库列表：按排序值，其次建库顺序 */
+export function listIconLibraries(): IconLibrary[] {
+  return db
+    .select()
+    .from(iconLibrary)
+    .orderBy(asc(iconLibrary.sortOrder), asc(iconLibrary.id))
+    .all();
 }
 
 /** 各观影平台被多少条流水引用，用于设置页展示与删除前提示 */
