@@ -127,17 +127,18 @@ function WatchingCard({
   tab: WatchingTab;
 }) {
   const { progress } = item;
+  const status = item.latestStatus;
   const season = currentSeason(progress);
   // 追剧页的剧都是用户自己标过状态的，一集没标记也该能就地开始追，
   // 所以这里放开零进度限制；档案库那份调用不传这个开关，保持克制
   const nextEpisode = nextEpisodeTarget(progress, { allowZeroProgress: true });
-  const label = showProgressLabel(progress);
+  // 带上状态：弃看/搁置的剧不该在进度里说「追剧中」
+  const label = showProgressLabel(progress, status);
   const total = progress.totalCount;
   const percent = total > 0 ? (progress.watchedCount / total) * 100 : 0;
   // 该季评分比最近一条流水的评分更贴题：豆瓣按季建条目，最近一条可能是别的季
   const rating = season?.rating ?? item.latestRating;
   const lastAt = item.lastEpisodeAt ?? item.lastWatchedAt;
-  const status = item.latestStatus;
 
   return (
     <li className="flex gap-3 rounded-xl bg-card p-3 ring-1 ring-foreground/10">

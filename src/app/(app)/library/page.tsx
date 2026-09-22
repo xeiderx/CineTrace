@@ -9,13 +9,14 @@ import { NextEpisodeButton } from "@/components/library/next-episode-button";
 import { WorkSearchCreateDialog } from "@/components/library/work-search-create-dialog";
 import {
   RatingStars,
+  WorkMediaTypeIcon,
   WorkMetaBadges,
   WorkPoster,
 } from "@/components/library/work-card";
 import { EmptyState } from "@/components/layout/empty-state";
 import { PageHeader } from "@/components/layout/page-header";
 import { Badge } from "@/components/ui/badge";
-import { formatDate, parseStringList, tagChipStyle } from "@/lib/labels";
+import { formatDate, tagChipStyle } from "@/lib/labels";
 import {
   listCountryFacets,
   listGenreFacets,
@@ -120,23 +121,25 @@ export default async function LibraryPage({
               所以这里不设 3 列档——多一档就会在末行留出空位 */}
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 xl:grid-cols-5">
             {result.items.map((item) => {
-              // 进度文案优先用逐集记录派生的结果，它比手填列算得准
+              // 进度文案优先用逐集记录派生的结果，它比手填列算得准；
+              // 带上状态是为了让弃看的剧说「弃看」而不是「追剧中」
               const progress = item.progress
-                ? showProgressLabel(item.progress)
+                ? showProgressLabel(item.progress, item.latestStatus)
                 : null;
-              const nextEpisode = item.progress
-                ? nextEpisodeTarget(item.progress)
-                : null;
+              // 弃看的剧不再往后推进度，卡片上就不挂「标记下一集」了
+              const nextEpisode =
+                item.progress && item.latestStatus !== "dropped"
+                  ? nextEpisodeTarget(item.progress)
+                  : null;
               return (
                 // 删除、标记下一集这两个按钮与链接是兄弟节点而非嵌套：
                 // 按钮放进 <Link> 内部时，点它会连带触发跳转，
                 // 键盘与读屏也会把它当成链接的一部分。
-                // 容器拉成纵向 flex，快捷按钮就能贴住卡片底部，
-                // 同一行里各张卡片的按钮才对得齐。
-                <div key={item.id} className="group relative flex flex-col gap-2">
+                // 因此「进度 + 标记下一集」这一行连同标签行都放在链接之外。
+                <div key={item.id} className="group relative flex flex-col gap-1.5">
                   <Link
                     href={`/library/${item.id}`}
-                    className="block flex-1 space-y-2.5 rounded-xl outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                    className="block space-y-2.5 rounded-xl outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
                   >
                     <div className="relative overflow-hidden rounded-lg ring-1 ring-foreground/10">
                       <WorkPoster
@@ -152,60 +155,75 @@ export default async function LibraryPage({
                     </div>
 
                     <div className="space-y-1.5">
-                      <p className="line-clamp-1 text-sm font-medium" title={item.title}>
-                        {item.title}
-                      </p>
+                      {/* 第一行：名称 + 年代 + 类型图标。片名可收缩截断但不撑满，
+                          这样年代紧跟其后（约一个汉字的间距），类型图标靠右 */}
+                      <div className="flex items-center gap-3">
+                        <p
+                          className="min-w-0 truncate text-sm font-medium"
+                          title={item.title}
+                        >
+                          {item.title}
+                        </p>
+                        {item.year ? (
+                          <span className="shrink-0 text-xs text-muted-foreground">
+                            {item.year}
+                          </span>
+                        ) : null}
+                        <WorkMediaTypeIcon
+                          mediaType={item.mediaType}
+                          className="ml-auto size-3.5 shrink-0 text-muted-foreground"
+                        />
+                      </div>
+                      {/* 第二行：看过日期 + 看过状态 + 来源渠道图标，「豆瓣已移除」缀在行尾 */}
                       <WorkMetaBadges
-                        mediaType={item.mediaType}
-                        year={item.year}
+                        date={
+                          item.lastWatchedAt ? formatDate(item.lastWatchedAt) : null
+                        }
                         status={item.latestStatus}
-                        country={parseStringList(item.countries)[0] ?? null}
                         channel={item.latestChannel}
                         removedCount={item.removedCount}
                       />
-                      {progress ? (
-                        <p className="text-xs text-muted-foreground">{progress}</p>
-                      ) : item.lastWatchedAt ? (
-                        <p className="text-xs text-muted-foreground">
-                          {formatDate(item.lastWatchedAt)}
-                        </p>
-                      ) : null}
-                      {item.tags.length > 0 ? (
-                        <div className="flex flex-wrap gap-1 pt-0.5">
-                          {item.tags.slice(0, 3).map((t) => (
-                            <Badge
-                              key={t.id}
-                              variant="secondary"
-                              className="font-normal"
-                              style={tagChipStyle(t.color)}
-                            >
-                              {t.name}
-                            </Badge>
-                          ))}
-                        </div>
-                      ) : null}
                     </div>
                   </Link>
 
-                  {/* 正在追的剧给一个「标记下一集」的快捷入口，不必进详情页开面板。
-                      只标一集、日期取今天，要挑日期或跳集仍去详情页的分季面板。 */}
-                  {nextEpisode ? (
-                    <div className="flex items-center gap-2">
-                      <NextEpisodeButton
-                        workId={item.id}
-                        seasonNumber={nextEpisode.seasonNumber}
-                        episodeNumber={nextEpisode.episodeNumber}
-                        completesSeason={nextEpisode.completesSeason}
-                        nextSeasonName={nextEpisode.nextSeasonName}
-                        label={item.title}
-                      />
-                      {item.progress && item.progress.seasons.length > 1 ? (
-                        <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-                          {nextEpisode.seasonName}
-                        </span>
-                      ) : null}
-                    </div>
-                  ) : null}
+                  <div className="space-y-1.5">
+                    {/* 第三行：追剧进度；「标记下一集」靠右跟在同一行。
+                        进度文案用 flex-1 吃掉余量，按钮就贴在行尾。 */}
+                    {progress ? (
+                      <div className="flex items-center gap-2">
+                        <p className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                          {progress}
+                        </p>
+                        {/* 正在追的剧给一个「标记下一集」的快捷入口，不必进详情页开面板。
+                            只标一集、日期取今天，要挑日期或跳集仍去详情页的分季面板。 */}
+                        {nextEpisode ? (
+                          <NextEpisodeButton
+                            workId={item.id}
+                            seasonNumber={nextEpisode.seasonNumber}
+                            episodeNumber={nextEpisode.episodeNumber}
+                            completesSeason={nextEpisode.completesSeason}
+                            nextSeasonName={nextEpisode.nextSeasonName}
+                            label={item.title}
+                          />
+                        ) : null}
+                      </div>
+                    ) : null}
+                    {/* 第四行：标签 */}
+                    {item.tags.length > 0 ? (
+                      <div className="flex flex-wrap gap-1 pt-0.5">
+                        {item.tags.slice(0, 3).map((t) => (
+                          <Badge
+                            key={t.id}
+                            variant="secondary"
+                            className="font-normal"
+                            style={tagChipStyle(t.color)}
+                          >
+                            {t.name}
+                          </Badge>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
 
                   {/* 桌面端悬停才现身，避免整屏卡片挂满垃圾桶；触屏没有 hover，
                       用 group-focus-within 让键盘也能到达，并始终保留可点区域 */}

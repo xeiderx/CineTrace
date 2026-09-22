@@ -377,8 +377,11 @@ export default async function WorkDetailPage({
   // 刷次取下流水的最大 watchIndex，不能数流水条数：
   // 豆瓣按季建条目，多季剧一季一条流水，按条数算会把季数当刷数（7 季剧显示成 7 刷）
   const watchIndex = records.reduce((max, r) => Math.max(max, r.watchIndex), 1);
-  // 整剧进度优先看逐集数据：它比 progressSeason/episodesWatched 这类手填列准
-  const progressText = progress ? showProgressLabel(progress) : null;
+  // 整剧进度优先看逐集数据：它比 progressSeason/episodesWatched 这类手填列准；
+  // 带上最新状态，弃看的剧才不会在进度里写着「追剧中」
+  const progressText = progress
+    ? showProgressLabel(progress, latest?.status ?? null)
+    : null;
   // 面板里的季切换、日期默认值都在客户端用，这里把服务端数据裁成纯值再下传
   const today = todayIso();
   const panelSeasons: PanelSeason[] = seasons.map((season) => ({
@@ -471,8 +474,8 @@ export default async function WorkDetailPage({
             {item.originalTitle && item.originalTitle !== item.title ? (
               <p className="text-sm text-muted-foreground">{item.originalTitle}</p>
             ) : null}
+            {/* 这里不再重复媒体类型：下方类型行已经用图标 + 文字表达过一次 */}
             <WorkMetaBadges
-              mediaType={item.mediaType}
               year={item.year}
               status={latest?.status ?? null}
               country={countries[0] ?? null}
@@ -490,23 +493,6 @@ export default async function WorkDetailPage({
               }
             />
           </div>
-
-          {/* 顶部只放「最新一次观看」的标签：标签挂在某一次观看上，
-              历史各刷的记在下方各自的流水上，避免互相矛盾的信息堆在一起。
-              还没有任何流水时无处可挂，只提示去记一次观看。 */}
-          {latest ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <WorkTagEditor
-                viewRecordId={latest.id}
-                attached={latest.tags}
-                allTags={allTags}
-              />
-            </div>
-          ) : (
-            <p className="text-xs text-muted-foreground">
-              还没有观影记录，标签与来源渠道都要挂在某一次观看上。
-            </p>
-          )}
 
           <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-sm text-muted-foreground">
             <span className="inline-flex items-center gap-1.5">
@@ -536,6 +522,23 @@ export default async function WorkDetailPage({
               <span className="text-primary">{progressText}</span>
             ) : null}
           </div>
+
+          {/* 标签行排在类型行之后：标签挂在「最新一次观看」上，
+              历史各刷的记在下方各自的流水上，避免互相矛盾的信息堆在一起。
+              还没有任何流水时无处可挂，只提示去记一次观看。 */}
+          {latest ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <WorkTagEditor
+                viewRecordId={latest.id}
+                attached={latest.tags}
+                allTags={allTags}
+              />
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              还没有观影记录，标签与来源渠道都要挂在某一次观看上。
+            </p>
+          )}
 
           <div className="space-y-2 border-t border-border/60 pt-4">
             <InfoRow label="类型" value={genres.join(" / ")} />

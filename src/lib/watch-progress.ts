@@ -382,6 +382,11 @@ export function showProgressLabel(
     ShowProgress,
     "currentSeason" | "watchedCount" | "totalCount" | "completed"
   >,
+  /**
+   * 最新一条流水上的状态。弃看、搁置的剧不该说「追剧中」——文案会和旁边的状态徽标
+   * 自相矛盾，这里换成对应的说法，其余状态仍按「追剧中」描述。
+   */
+  status?: string | null,
 ): string | null {
   const { currentSeason, watchedCount, totalCount, completed } = progress;
 
@@ -390,7 +395,9 @@ export function showProgressLabel(
   }
   if (currentSeason != null) {
     const tail = totalCount > 0 ? ` · ${watchedCount}/${totalCount} 集` : "";
-    return `第 ${currentSeason} 季追剧中${tail}`;
+    const state =
+      status === "dropped" ? "弃看" : status === "on_hold" ? "搁置中" : "追剧中";
+    return `第 ${currentSeason} 季${state}${tail}`;
   }
   if (watchedCount > 0) {
     return totalCount > 0 ? `已看 ${watchedCount}/${totalCount} 集` : `已看 ${watchedCount} 集`;

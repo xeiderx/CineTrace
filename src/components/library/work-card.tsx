@@ -1,8 +1,12 @@
 import type { ReactNode } from "react";
-import { Ban, CirclePause, Star, type LucideIcon } from "lucide-react";
+import { Ban, CirclePause, Film, Star, Tv, type LucideIcon } from "lucide-react";
 import { ChannelIcon } from "@/components/library/channel-icon";
-import { Badge } from "@/components/ui/badge";
-import { DOUBAN_REMOVED_LABEL, mediaTypeLabel, viewStatusLabel, viewStatusTone } from "@/lib/labels";
+import {
+  DOUBAN_REMOVED_LABEL,
+  mediaTypeLabel,
+  viewStatusLabel,
+  viewStatusTone,
+} from "@/lib/labels";
 import { posterUrl } from "@/lib/queries";
 
 /** 五角星评分展示，只读 */
@@ -415,9 +419,23 @@ export function WorkPoster({
   );
 }
 
+/** 媒体类型图标：电影用 Film，剧集用 Tv，与详情页的类型行保持一致 */
+export function WorkMediaTypeIcon({
+  mediaType,
+  className,
+}: {
+  mediaType: string;
+  className?: string;
+}) {
+  const Icon = mediaType === "tv" ? Tv : Film;
+  return (
+    <Icon role="img" aria-label={mediaTypeLabel(mediaType)} className={className} />
+  );
+}
+
 /** 作品在列表中的元信息标签行 */
 export function WorkMetaBadges({
-  mediaType,
+  date,
   year,
   status,
   country,
@@ -425,10 +443,11 @@ export function WorkMetaBadges({
   channel,
   trailing,
 }: {
-  mediaType: string;
-  year: number | null;
+  /** 最近一次观看日期，列表卡片放在行首 */
+  date?: string | null;
+  year?: number | null;
   status: string | null;
-  /** 制片国家，列表里只展示第一个，多了卡片放不下 */
+  /** 制片国家，详情页展示第一个，列表卡片不再展示 */
   country?: string | null;
   /** 「豆瓣已移除」标记的流水条数，0 表示不展示 */
   removedCount?: number;
@@ -442,9 +461,7 @@ export function WorkMetaBadges({
 }) {
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      <Badge variant="outline" className="font-normal">
-        {mediaTypeLabel(mediaType)}
-      </Badge>
+      {date ? <span className="text-xs text-muted-foreground">{date}</span> : null}
       {year ? (
         <span className="text-xs text-muted-foreground">{year}</span>
       ) : null}
