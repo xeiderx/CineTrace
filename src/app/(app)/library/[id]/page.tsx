@@ -163,7 +163,7 @@ function ViewRecordItem({
           {record.doubanRemovedAt ? (
             <span
               className="inline-flex h-5 items-center rounded-4xl bg-amber-500/15 px-2 text-xs font-medium text-amber-400"
-              title="最后一次全量同步时，这条记录已不在豆瓣列表上"
+              title="最近一次同步时，这条记录已不在豆瓣列表上"
             >
               {DOUBAN_REMOVED_LABEL}
             </span>

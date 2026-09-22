@@ -113,12 +113,12 @@ export default function OverviewPage() {
             合并或转为私密的条目，它们仍计入豆瓣总数但不再出现在列表里，无法抓取
           </p>
         ) : null}
-        {/* 有标记才提示：没标记说明全量同步没发现任何条目从豆瓣列表上消失。
+        {/* 有标记才提示：没标记说明同步没发现任何条目从豆瓣列表上消失。
             豆瓣把它删除、合并或转为私密后，本地流水照旧保留，只是打上标记，
             清不清理交给用户自己决定，所以这里只给条数与入口，不做任何自动删除。 */}
         {stats.doubanRemovedCount > 0 ? (
           <p className="mt-3 text-xs text-muted-foreground">
-            有 {stats.doubanRemovedCount} 条记录在最后一次全量同步中已不在豆瓣列表上 ｜{" "}
+            有 {stats.doubanRemovedCount} 条记录在最近一次同步中已不在豆瓣列表上 ｜{" "}
             <Link
               href={`/library?removed=${DOUBAN_REMOVED_FILTER}`}
               className="text-primary hover:underline"

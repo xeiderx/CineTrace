@@ -789,7 +789,7 @@ export type OverviewStats = {
   rewatchWorkCount: number;
   /**
    * 带「豆瓣已移除」标记的流水条数。这些记录仍在库里、仍计入上面的
-   * watchedRecordCount，只是最后一次全量同步在豆瓣列表上没再见到它们；
+   * watchedRecordCount，只是最近一次完整翻过该列表的同步没再见到它们；
    * 单独列出来是为了让用户决定要不要清理。
    */
   doubanRemovedCount: number;

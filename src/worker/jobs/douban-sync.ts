@@ -383,7 +383,11 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
 
       const items = parseListPage(html);
       if (items.length === 0) {
-        reachedEnd = true; // 翻到末页
+        // 首页解析不出条目，多半是豆瓣给了一页结构变了/软拒绝的 HTML，
+        // 而不是这个列表真的空（真的空时 h1 声明的总数就是 0）。
+        // 前者不足以证明「整份列表都翻过了」，不置 reachedEnd，
+        // 免得把该状态下的本地记录整批误标成已移除；非首页则确实已翻过结尾。
+        reachedEnd = start > 0 || pageTotal === 0;
         break;
       }
       const hasNext = parseHasNext(html);
@@ -404,8 +408,11 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
       options.onProgress?.({ seen: stats.itemsSeen, total: totalKnown ? totalSum : null });
 
       start += LIST_PAGE_SIZE;
-      // 增量轮：首页见到已知条目就说明后面只会更旧，不必再翻
-      if (!full && sawKnown) break;
+
+      // 末页判定要排在增量早停之前：「想看/在看」这种小列表一页就翻完，
+      // 首页即末页，这一页已覆盖整份列表，可以放心参与「已移除」比对。
+      // 大列表在第 1 页上这两个条件都为假（后面还有页、也没翻满声明条数），
+      // 所以调整顺序不影响它们，照旧落到下面的增量早停。
       if (pageTotal !== null && processed >= pageTotal) {
         reachedEnd = true; // 声明的条数都已翻完
         break;
@@ -417,6 +424,9 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
         reachedEnd = true;
         break;
       }
+
+      // 增量轮：首页见到已知条目就说明后面只会更旧，不必再翻
+      if (!full && sawKnown) break;
       // 分页器结构异常时只能按短页兜底：这种「猜」出来的末页不足以支撑
       // 「已移除」判定，所以不置 reachedEnd。
       if (hasNext === null && items.length < LIST_PAGE_SIZE) break;
@@ -478,12 +488,15 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
   }
 
   // 「豆瓣已移除」标记：只有这轮从第 1 页完整翻到末页的列表才敢做比对。
-  // 增量轮只翻首页、续跑轮只翻后半段、被拒或出窗暂停时剩下的页没翻——
+  // 增量轮里的大列表只翻了首页就早停、续跑轮只翻后半段、被拒或出窗暂停时剩下的页没翻——
   // 这些情况下 seenSourceKeys 都不是全量，拿去比对会大面积误标。
+  // 但「一页即全列表」的小列表（想看/在看常常只有几条）在增量轮同样是完整覆盖的，
+  // 它们会被上面的 reachedEnd 收进 traversedLists，于是这里不再要求 full——
+  // 用户的删除立刻就能反映到本地，不必等到下一次全量。
   // 关掉同步的小列表压根没进 enabledLists，自然不会出现在 traversedLists 里，
   // 也就不会把整个列表误判成「已移除」。
   let removedMarked = 0;
-  if (full && traversedLists.size > 0) {
+  if (traversedLists.size > 0) {
     removedMarked = markDoubanRemoved(seenSourceKeys, traversedLists);
   }
 
@@ -519,7 +532,7 @@ function isFullSyncDue(): boolean {
 }
 
 /**
- * 全量翻完一轮后，把本地记录里本轮没见到的打上「豆瓣已移除」标记。
+ * 把本地记录里「本轮完整翻过、却始终没见到」的打上「豆瓣已移除」标记。
  *
  * 豆瓣对删除/合并/转私密这三种变动不给任何信号，条目只是从列表里消失，
  * 所以只能反推：整份列表都翻过了、这一条却不在其中，那它多半已经不在了。
