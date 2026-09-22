@@ -66,9 +66,11 @@ export function CastWall({ cast }: { cast: CastPortrait[] }) {
 
   return (
     <>
-      <ul className="grid grid-cols-3 gap-x-2 gap-y-4 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8">
+      {/* 窄屏单行横向滑动：主演动辄十来个，铺成网格会把详情页拉得很长；
+          宽屏空间够，回到网格一次看全 */}
+      <ul className="-mx-4 flex gap-3 overflow-x-auto px-4 pb-1 sm:mx-0 sm:grid sm:grid-cols-4 sm:gap-x-2 sm:gap-y-4 sm:overflow-visible sm:px-0 md:grid-cols-6 lg:grid-cols-8">
         {cast.map((item) => (
-          <li key={item.id}>
+          <li key={item.id} className="w-20 shrink-0 sm:w-auto">
             <button
               type="button"
               onClick={() => open(item)}

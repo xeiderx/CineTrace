@@ -856,10 +856,17 @@ export function importBackup(file: BackupFile): ImportStats {
  * 判据只看主演：它是后加的字段，旧同步代码从没写过，必然为空；
  * 而国家当年是从豆瓣列表页的 item.country 写进去的，存量数据里非空，
  * 拿它当判据会一条都判不出来。
+ * 简介同理：老同步把 TMDB 检索结果的 overview 原样写入，而那个接口
+ * 通常返回空串，存量作品的简介其实一直没落库，这里要一并纳入待补。
  */
 export const pendingMetadataWhere = and(
   isNotNull(work.tmdbId),
-  or(isNull(work.metadataSyncedAt), eq(work.cast, "[]")),
+  or(
+    isNull(work.metadataSyncedAt),
+    eq(work.cast, "[]"),
+    isNull(work.overview),
+    eq(work.overview, ""),
+  ),
 );
 
 /** 待补 TMDB 元数据的作品数。 */

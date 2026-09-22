@@ -1,6 +1,6 @@
 {
   "name": "cinetrace",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "影视记录与媒体管理平台",
   "private": true,
   "type": "module",

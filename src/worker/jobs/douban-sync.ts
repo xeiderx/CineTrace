@@ -589,6 +589,9 @@ function isMetadataComplete(row: typeof work.$inferSelect | undefined): boolean 
   if (row.mediaType === "tv" && row.tmdbId !== null && row.seasonsJson === "[]") return false;
   // 主演为空 ⇒ 是老数据（当年还不抓这项），需要重拉一次
   if (row.cast === "[]") return false;
+  // 简介为空也当没同步过：当年只写了检索结果的 overview（多为空串），
+  // 存量数据的简介其实一直没落库，不在这里判就永远补不回来
+  if (!row.overview?.trim()) return false;
   return true;
 }
 
@@ -725,7 +728,10 @@ function buildWorkValues(
     // 主海报用 TMDB 整剧海报，不用季海报
     posterPath: detail?.posterPath ?? tmdb?.posterPath ?? null,
     backdropPath: tmdb?.backdropPath ?? null,
-    overview: tmdb?.overview ?? null,
+    // 简介优先取详情，检索结果只兜底。当年只写检索结果的 overview，
+    // 而那时这些片多半还没有中文翻译，拿到空串也照样落库；
+    // 旧判据又认为元数据已完整、永不重拉，整库简介就这么一直空着
+    overview: detail?.overview ?? (tmdb?.overview?.trim() || null),
     // 剧集为单集时长
     runtime: detail?.runtime ?? null,
     seasonCount: isTv ? detail?.seasonCount ?? (seasons.length || null) : null,

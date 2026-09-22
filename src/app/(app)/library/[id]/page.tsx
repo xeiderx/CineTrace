@@ -15,6 +15,7 @@ import { ViewRecordDialog } from "@/components/library/view-record-dialog";
 import { SourceChannelSelect } from "@/components/library/source-channel-select";
 import { WorkFormDialog } from "@/components/library/work-form-dialog";
 import { WorkMatchDialog } from "@/components/library/work-match-dialog";
+import { WorkOverview } from "@/components/library/work-overview";
 import { WorkTagEditor } from "@/components/library/work-tag-editor";
 import {
   RatingStars,
@@ -67,7 +68,8 @@ function InfoRow({ label, value }: { label: string; value: string | null }) {
   if (!value) return null;
   return (
     <div className="flex gap-3 text-sm">
-      <span className="w-20 shrink-0 text-muted-foreground">{label}</span>
+      {/* 窄屏要和海报平分宽度，标签列收窄一点，留给值的位置才够 */}
+      <span className="w-14 shrink-0 text-muted-foreground sm:w-20">{label}</span>
       <span className="min-w-0 flex-1">{value}</span>
     </div>
   );
@@ -455,8 +457,10 @@ export default async function WorkDetailPage({
         </div>
       </div>
 
-      <div className="flex flex-col gap-6 sm:flex-row">
-        <div className="w-36 shrink-0 sm:w-48">
+      {/* 窄屏也保持左右两栏：海报单独占一列，名称、标签与信息块都贴着它排，
+          否则移动端海报右侧会空出一大片，整页被拉得很长 */}
+      <div className="flex gap-4 sm:gap-6">
+        <div className="w-28 shrink-0 sm:w-40 md:w-48">
           <div className="overflow-hidden rounded-xl ring-1 ring-foreground/10">
             <WorkPoster
               title={item.title}
@@ -468,7 +472,7 @@ export default async function WorkDetailPage({
 
         <div className="min-w-0 flex-1 space-y-4">
           <div className="space-y-2">
-            <h1 className="text-2xl font-semibold tracking-tight">
+            <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">
               {item.title}
             </h1>
             {item.originalTitle && item.originalTitle !== item.title ? (
@@ -562,14 +566,7 @@ export default async function WorkDetailPage({
             />
           </div>
 
-          {item.overview ? (
-            <div className="space-y-1.5 border-t border-border/60 pt-4">
-              <p className="text-xs font-medium text-muted-foreground">简介</p>
-              <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground/90">
-                {item.overview}
-              </p>
-            </div>
-          ) : null}
+          {item.overview ? <WorkOverview overview={item.overview} /> : null}
         </div>
       </div>
 

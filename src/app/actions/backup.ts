@@ -224,6 +224,7 @@ async function fillOne(row: {
   db.update(work)
     .set({
       posterPath: detail.posterPath,
+      overview: detail.overview,
       runtime: detail.runtime,
       seasonCount: isTv ? detail.seasonCount ?? (detail.seasons.length || null) : null,
       episodeCount: isTv ? detail.episodeCount ?? null : null,
@@ -242,6 +243,6 @@ async function fillOne(row: {
     .where(eq(work.id, row.id))
     .run();
 
-  // 写入后是否还留在待补队列里，取决于主演有没有拿到（见 lib/backup.ts 的判定）
-  return detail.cast.length > 0;
+  // 写入后是否还留在待补队列里，取决于主演与简介有没有都拿到（见 lib/backup.ts 的判定）
+  return detail.cast.length > 0 && Boolean(detail.overview);
 }
