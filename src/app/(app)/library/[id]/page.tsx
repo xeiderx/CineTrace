@@ -47,7 +47,7 @@ import {
   type ViewRecordWithPlatform,
 } from "@/lib/queries";
 import { dateSourceHint, showProgressLabel, todayIso } from "@/lib/watch-progress";
-import type { Platform } from "@/db/schema";
+import type { Platform, Tag } from "@/db/schema";
 
 export async function generateMetadata({
   params,
@@ -95,12 +95,17 @@ function ViewRecordItem({
   platforms,
   defaultPlatformName,
   seasons,
+  tags,
+  allTags,
 }: {
   record: ViewRecordWithPlatform;
   mediaType: string;
   platforms: Platform[];
   defaultPlatformName: string | null;
   seasons: SeasonWithRecord[];
+  /** 作品已挂标签与全部标签，透传给弹窗里的标签选择区 */
+  tags: Tag[];
+  allTags: Tag[];
 }) {
   const progress = progressLabel({
     mediaType,
@@ -169,6 +174,8 @@ function ViewRecordItem({
           defaultPlatformName={defaultPlatformName}
           seasons={seasons}
           record={record}
+          tags={tags}
+          allTags={allTags}
         />
         <ConfirmDeleteButton
           action={deleteViewRecordAction}
@@ -382,9 +389,11 @@ export default async function WorkDetailPage({
             platforms={platforms}
             defaultPlatformName={defaultPlatform?.name ?? null}
             seasons={seasons}
+            tags={tags}
+            allTags={allTags}
           />
           <WorkMatchDialog workId={item.id} workTitle={item.title} />
-          <WorkFormDialog work={item} />
+          <WorkFormDialog work={item} tags={tags} allTags={allTags} />
           <ConfirmDeleteButton
             action={deleteWorkAction}
             id={item.id}
@@ -551,6 +560,8 @@ export default async function WorkDetailPage({
                 platforms={platforms}
                 defaultPlatformName={defaultPlatform?.name ?? null}
                 seasons={seasons}
+                tags={tags}
+                allTags={allTags}
               />
             ))}
           </ul>

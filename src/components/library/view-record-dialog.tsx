@@ -35,7 +35,8 @@ import {
   viewRecordFieldLabel,
 } from "@/lib/labels";
 import { parseManualFields } from "@/lib/watch-progress";
-import type { Platform, ViewRecord } from "@/db/schema";
+import { WorkTagEditor } from "@/components/library/work-tag-editor";
+import type { Platform, Tag, ViewRecord } from "@/db/schema";
 
 /** 平台下拉的哨兵值：Radix Select 不接受空字符串作为 value */
 const USE_DEFAULT = "__default__";
@@ -53,6 +54,8 @@ export function ViewRecordDialog({
   defaultPlatformName,
   seasons,
   record,
+  tags = [],
+  allTags,
 }: {
   workId: number;
   mediaType: string;
@@ -61,6 +64,10 @@ export function ViewRecordDialog({
   /** 该剧 TMDB 的季列表；为空时季号只能手填。`episodeCount` 用于卡住手填集数的上限 */
   seasons: { seasonNumber: number; name: string; episodeCount?: number }[];
   record?: ViewRecord;
+  /** 作品已挂的标签。标签挂在作品层，与单条流水无关，这里只是就近提供编辑入口 */
+  tags?: Tag[];
+  /** 全部标签，供选择区挑选；不传则不显示标签区 */
+  allTags?: Tag[];
 }) {
   const isEdit = Boolean(record);
   const [open, setOpen] = useState(false);
@@ -348,6 +355,19 @@ export function ViewRecordDialog({
               placeholder="可选"
             />
           </div>
+
+          {/* 标签挂在作品上，不属于这条流水，改动即时生效，
+              因此放在主表单里只是就近摆放，不参与本次提交。 */}
+          {allTags ? (
+            <div className="space-y-2">
+              <Label>标签</Label>
+              <WorkTagEditor
+                workId={workId}
+                attached={tags ?? []}
+                allTags={allTags}
+              />
+            </div>
+          ) : null}
 
           {state?.error ? (
             <p

@@ -26,6 +26,46 @@ export const VIEW_STATUS_TONES: Record<ViewStatus, string> = {
   dropped: "bg-muted text-muted-foreground",
 };
 
+/**
+ * 标签可选颜色的预设色板。
+ *
+ * 挑的是中高亮度、饱和度适中的色号：标签用的是「15% 淡底 + 同色文字」，
+ * 这套色号在深色主题下当文字够亮，做成淡底也不发灰。
+ * 与平台标识色的取色习惯（暖金 / 蓝 / 紫 / 红）保持同一调性。
+ */
+export const TAG_COLOR_PRESETS: string[] = [
+  "#e0a458",
+  "#e06c75",
+  "#e07ba0",
+  "#cf7bd0",
+  "#9b7bd5",
+  "#7b8ce0",
+  "#5b9bd5",
+  "#54b6c8",
+  "#4fbfa8",
+  "#6fc27c",
+  "#a3b75a",
+  "#9aa4b2",
+];
+
+/**
+ * 标签胶囊的配色：标签色的 15% 淡底 + 同色文字，与 `VIEW_STATUS_TONES` 同一套观感。
+ *
+ * 用 color-mix 而不是拼 8 位 hex：颜色值可能来自原生取色器，
+ * 也可能被人手工填成 rgb() 之类的写法，拼字符串前缀会直接失效。
+ * 未设颜色时返回 undefined，由调用方回落到中性的 muted 样式。
+ */
+export function tagChipStyle(
+  color: string | null | undefined,
+): { color: string; backgroundColor: string } | undefined {
+  const value = color?.trim();
+  if (!value) return undefined;
+  return {
+    color: value,
+    backgroundColor: `color-mix(in srgb, ${value} 15%, transparent)`,
+  };
+}
+
 export const MATCH_STATUS_LABELS: Record<MatchStatus, string> = {
   matched: "已匹配",
   manual: "自由添加",

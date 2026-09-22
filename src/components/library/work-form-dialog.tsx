@@ -27,8 +27,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { WorkTagEditor } from "@/components/library/work-tag-editor";
 import { MEDIA_TYPE_LABELS, parseCast } from "@/lib/labels";
-import type { Work } from "@/db/schema";
+import type { Tag, Work } from "@/db/schema";
 
 /** 把 JSON 数组列还原成逗号分隔文本，供表单编辑 */
 function joinList(value: string | null | undefined): string {
@@ -57,11 +58,17 @@ function joinCast(value: string | null | undefined): string {
  */
 export function WorkFormDialog({
   work,
+  tags,
+  allTags,
   open: controlledOpen,
   onOpenChange,
   showTrigger = true,
 }: {
   work?: Work;
+  /** 作品当前已挂的标签，仅编辑模式需要 */
+  tags?: Tag[];
+  /** 全部标签，供选择区挑选 */
+  allTags?: Tag[];
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   showTrigger?: boolean;
@@ -301,6 +308,19 @@ export function WorkFormDialog({
                 placeholder="剧情简介"
               />
             </div>
+
+            {/* 标签挂在作品上，与本次表单提交无关（即时生效），因此不动 updateWorkAction。
+                新建作品时还没有 workId，无法挂标签，只在编辑模式出现。 */}
+            {isEdit && work && allTags ? (
+              <div className="space-y-2 sm:col-span-2">
+                <Label>标签</Label>
+                <WorkTagEditor
+                  workId={work.id}
+                  attached={tags ?? []}
+                  allTags={allTags}
+                />
+              </div>
+            ) : null}
           </div>
 
           {state?.error ? (

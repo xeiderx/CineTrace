@@ -652,16 +652,23 @@ export async function getPersonProfileAction(
   };
 }
 
-/** 为作品挂上标签。已存在的标签直接复用，否则新建 */
+/**
+ * 为作品挂上标签。已存在的标签直接复用，否则新建。
+ *
+ * 同名标签直接复用现有记录，**不覆盖它已有的颜色**：
+ * 颜色属于标签本体的属性，在标签管理页统一调整，
+ * 这里顺手改色会让别处同标签的作品跟着变色。
+ */
 export async function attachTagAction(formData: FormData): Promise<void> {
   const workId = int(formData, "workId");
   const name = text(formData, "name");
   if (workId == null || !name) return;
 
+  const color = text(formData, "color");
   const existing = db.select().from(tag).where(eq(tag.name, name)).get();
   const tagId =
     existing?.id ??
-    db.insert(tag).values({ name }).returning({ id: tag.id }).get().id;
+    db.insert(tag).values({ name, color }).returning({ id: tag.id }).get().id;
 
   db.insert(workTag).values({ workId, tagId }).onConflictDoNothing().run();
   refreshLibrary(workId);
@@ -1246,6 +1253,35 @@ export async function createTagAction(
 
   db.insert(tag).values({ name, color: text(formData, "color") }).run();
   revalidatePath("/settings");
+  return { ok: true };
+}
+
+/**
+ * 修改标签的名称与颜色。
+ *
+ * 重名检查要排除自身，否则只改颜色、名称不动时会被自己挡住。
+ * 颜色留空表示「清除颜色」，回落成中性样式。
+ */
+export async function updateTagAction(
+  _prev: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const id = int(formData, "id");
+  if (id == null) return { error: "标签不存在" };
+
+  const name = required(formData, "name");
+  if (!name) return { error: "请填写标签名称" };
+
+  const existing = db.select().from(tag).where(eq(tag.name, name)).get();
+  if (existing && existing.id !== id) return { error: "同名标签已存在" };
+
+  db.update(tag)
+    .set({ name, color: text(formData, "color") })
+    .where(eq(tag.id, id))
+    .run();
+
+  revalidatePath("/settings");
+  revalidatePath("/library");
   return { ok: true };
 }
 

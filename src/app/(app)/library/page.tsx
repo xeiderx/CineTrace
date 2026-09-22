@@ -15,7 +15,7 @@ import {
 import { EmptyState } from "@/components/layout/empty-state";
 import { PageHeader } from "@/components/layout/page-header";
 import { Badge } from "@/components/ui/badge";
-import { formatDate, parseStringList } from "@/lib/labels";
+import { formatDate, parseStringList, tagChipStyle } from "@/lib/labels";
 import {
   listCountryFacets,
   listGenreFacets,
@@ -164,7 +164,12 @@ export default async function LibraryPage({
                       {item.tags.length > 0 ? (
                         <div className="flex flex-wrap gap-1 pt-0.5">
                           {item.tags.slice(0, 3).map((t) => (
-                            <Badge key={t.id} variant="secondary" className="font-normal">
+                            <Badge
+                              key={t.id}
+                              variant="secondary"
+                              className="font-normal"
+                              style={tagChipStyle(t.color)}
+                            >
                               {t.name}
                             </Badge>
                           ))}
