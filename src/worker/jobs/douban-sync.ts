@@ -5,7 +5,7 @@ import { getSetting, setSetting } from "@/lib/settings";
 import { VIEW_STATUS_LABELS, type ViewStatus } from "@/lib/labels";
 import { parseManualFields } from "@/lib/watch-progress";
 import { archiveRaw } from "@/lib/douban/archive";
-import { isBlocked, needsLogin, req } from "@/lib/douban/client";
+import { classifyPage, jar, reqFollow } from "@/lib/douban/client";
 import { PARSER_VERSION, parseHasNext, parseListPage, parseListTotal, type ListPageItem } from "@/lib/douban/parse";
 import { parseSeasons } from "@/lib/queries";
 import {
@@ -99,10 +99,26 @@ type DoubanSyncOptions = {
   onProgress?: (progress: DoubanSyncProgress) => void;
 };
 
+/**
+ * 撞上风控后退避用的长间隔。平时按 2 小时一轮跑，一旦某个列表的首页
+ * 直接被挡（强受限信号），就临时退回这个节奏，让出口冷却下来。
+ */
+const BLOCKED_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
 export const doubanSyncJob: Job = {
   name: "douban-sync",
   kind: "douban-html",
-  intervalMs: 6 * 60 * 60 * 1000,
+  intervalMs: 2 * 60 * 60 * 1000,
+  /**
+   * 熔断退避：上一轮撞上强受限（首页即被挡）时退回 6 小时，连着一整轮
+   * 无阻跑完会由 runDoubanSync 把 streak 清零，于是自动回到 2 小时。
+   * 只读取本轮的 streak：翻页中途被挡、登录失效、请求异常都不写它，
+   * 也就不会被这点临时波动长期压低同步频率。
+   */
+  intervalMsOf: () =>
+    Number(getSetting("douban.blockedStreak") ?? 0) >= 1
+      ? BLOCKED_INTERVAL_MS
+      : 2 * 60 * 60 * 1000,
   // 锁的初值只保证「进得去、拿得住」，实际时长由 withLock 每 TTL/3 续租兜住：
   // 首次全量要回扫两千多条、逐条等 TMDB（每条 3~8 秒）＋上百页 5~12 秒翻页间隔，
   // 实测量级是数小时；后续全量元数据已齐，只剩翻页间隔，几十分钟即可跑完。
@@ -138,7 +154,7 @@ export async function runManualDoubanSync(
  */
 async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult> {
   // 以下三种都属于「没真正抓取」：连一个请求都没发出去。
-  // 统一标 skipped，调度器不会把这轮算进 6 小时间隔，
+  // 统一标 skipped，调度器不会把这轮算进轮次间隔，
   // 于是总开关一开 / 配置一补好，下一轮 tick 就能立刻抓。
   if (!options.force && !getSetting("sync.enabled")) {
     return { skipped: true, message: "同步开关已关闭，跳过" };
@@ -162,7 +178,7 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
 
   /** 记录一条可复现的错误，供设置页排查。reason 取值受表约束限制。 */
   const issue = (
-    reason: "no_match" | "low_score" | "network" | "parse" | "blocked",
+    reason: "no_match" | "low_score" | "network" | "parse" | "blocked" | "login",
     refId: string | null,
     title: string | null,
     detail: string,
@@ -299,8 +315,20 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
     return true;
   });
 
-  // 预热：先拿到 bid 等基础 Cookie，首屏直接请求容易被判为异常流量
-  await req(`${DOUBAN_ORIGIN}/`);
+  // 预热：先拿到 bid 等基础 Cookie，首屏直接请求容易被判为异常流量。
+  // 已有 Cookie 时就不必再空打一次——间隔缩到 2 小时后，每轮省下的这一个
+  // 请求就是实打实的密度下降（三列表增量轮总共才 3 个请求）。
+  // 进程重启后 Cookie 没了，这里会自动补上。
+  const needsWarmup = jar.size === 0;
+  if (needsWarmup) await reqFollow(`${DOUBAN_ORIGIN}/`);
+
+  /**
+   * 本轮是否已经发出过请求，决定下一个请求要不要先等一个随机间隔。
+   * 只豁免整轮的第一个请求，其余一律等——包括跨列表的首页。
+   * 原来按「start > 0」判断，增量轮每个列表都只翻首页，于是整轮 3~4 个请求
+   * 零间隔连发；请求总量再小，这种 burst 节奏也是最像机器的特征。
+   */
+  let requestSent = needsWarmup;
 
   // 断点续跑：上一轮撞上作息窗口结束时留下的位置。只有全量轮才认游标——
   // 增量轮本来就只翻首页，从半途开始毫无意义，反而会漏掉最新条目。
@@ -321,6 +349,13 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
   let watchedDeclaredTotal: number | null = null;
   /** 因作息窗口结束而暂停的位置；与「被豆瓣拒绝」不同，下一轮直接续跑 */
   let pausedAt: { status: ViewStatus; start: number } | null = null;
+  /**
+   * 本轮是否撞上强受限信号——某个列表的**第 1 页**直接被挡。
+   * 首页都不通说明这个出口已经被整体盯上，才值得把轮次间隔收回 6 小时；
+   * 翻到第 N 页才被挡更像抓太快触发的临时限速，中止本轮即可，
+   * 不该因此长期压低同步频率。
+   */
+  let blockedHard = false;
   /**
    * 这一轮从第 1 页一路翻到真实末页的列表。
    * 只有完整翻完的列表，seenSourceKeys 才覆盖得住它，才能反推「哪些记录已不在豆瓣列表里」；
@@ -352,17 +387,37 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
       }
 
       const url = listUrl(uid, list.path, start);
-      // 翻页之间必须留随机间隔，否则整轮节奏过于机械
-      if (start > 0) await sleep(randomInt(PAGE_GAP_MIN_MS, PAGE_GAP_MAX_MS));
+      // 除整轮第一个请求外都要留随机间隔。原来只在翻页时等，增量轮每个列表
+      // 都只翻首页，于是 3~4 个请求零间隔连发——这正是最像机器的特征。
+      if (requestSent) await sleep(randomInt(PAGE_GAP_MIN_MS, PAGE_GAP_MAX_MS));
 
-      const page = await req(url);
+      // 用 reqFollow 而不是 req：列表页偶尔 302 回自身域做 URL 规范化，
+      // 那是无害的，跟过去拿到落地响应即可；跳到 sec/passport 时它立刻收手，
+      // 把受限页原样交回来判定。
+      requestSent = true;
+      const page = await reqFollow(url);
       const pageNo = start / LIST_PAGE_SIZE + 1;
-      if (page.status !== 200 || isBlocked(page.text) || needsLogin(page.text)) {
-        issue("blocked", null, null, `${label}列表第 ${pageNo} 页受限 status=${page.status}`);
+      const verdict = classifyPage(page);
+      if (verdict !== "ok") {
+        // 落到第 1 页才算「这个出口整体不通」，见 blockedHard 的说明
         blockedAtFirstPage = start === listStart;
-        stopped = blockedAtFirstPage
-          ? `豆瓣拒绝访问（${label}列表首页即受限），本轮中止`
-          : `${label}列表第 ${pageNo} 页起被拒绝访问，本轮提前结束`;
+        if (verdict === "login") {
+          // 登录态失效与风控无关：不记 blocked、不计入退避，
+          // 只提示用户去补 Cookie，本轮照样中止（列表页内容也拿不到）
+          issue("login", null, null, `${label}列表第 ${pageNo} 页需要登录 status=${page.status}`);
+          stopped = "豆瓣登录态已失效，请在设置里更新 Cookie 后重试";
+        } else if (verdict === "redirect" || verdict === "error") {
+          // 走到这里说明 reqFollow 跟完自身域重定向后仍不落地（跳数超限之类）。
+          // 它既不是风控也不是登录问题，只中止本轮，不该触发降频退避。
+          issue("network", null, null, `${label}列表第 ${pageNo} 页无有效响应（${verdict}）status=${page.status}`);
+          stopped = `${label}列表第 ${pageNo} 页请求异常，本轮提前结束`;
+        } else {
+          issue("blocked", null, null, `${label}列表第 ${pageNo} 页受限（${verdict}）status=${page.status}`);
+          if (blockedAtFirstPage) blockedHard = true;
+          stopped = blockedAtFirstPage
+            ? `豆瓣拒绝访问（${label}列表首页即受限），本轮中止`
+            : `${label}列表第 ${pageNo} 页起被拒绝访问，本轮提前结束`;
+        }
         break;
       }
 
@@ -476,7 +531,7 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
   // 清游标只认全量轮：增量轮根本不会读游标，让它去改这个值只会平白毁掉别处的断点。
   //
   // 手动轮的冷却时间戳同样只认「真跑完」：被拒绝或中途停下时什么都不写，
-  // 否则用户会为了一个根本没成的同步白等一小时（增量）或三天（全量）。
+  // 否则用户会为了一个根本没成的同步白等半小时（增量）或三天（全量）。
   // 全量的 72 小时冷却直接复用 lastFullSyncAt——它的语义就是「最近一次全量完成」，
   // 手动全量成功后刷新它，天然满足「起点是任意一次全量（含自动）」。
   if (full && stopped === null) {
@@ -485,6 +540,19 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
   }
   if (options.manual && !full && stopped === null) {
     setSetting("douban.lastManualIncAt", new Date().toISOString());
+  }
+
+  // 熔断标量。只有「本轮一路跑完、没被任何东西挡住」才算恢复正常，立刻清零；
+  // 撞上强受限（某列表首页即不可达）才累加，并记下时刻供概览页显示恢复时间。
+  // 翻到第 N 页才被挡、登录失效、请求异常都不计入——前者更像临时限速，
+  // 后两者与风控无关，都不该让同步频率长期压在退避值上。
+  // 必须落库：web 与 worker 是两个进程，内存里的标记对方看不见。
+  if (stopped === null) {
+    setSetting("douban.blockedStreak", 0);
+    setSetting("douban.blockedAt", "");
+  } else if (blockedHard) {
+    setSetting("douban.blockedStreak", Number(getSetting("douban.blockedStreak") ?? 0) + 1);
+    setSetting("douban.blockedAt", new Date().toISOString());
   }
 
   // 「豆瓣已移除」标记：只有这轮从第 1 页完整翻到末页的列表才敢做比对。

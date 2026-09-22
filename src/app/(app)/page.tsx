@@ -98,7 +98,7 @@ export default function OverviewPage() {
         <div className="mb-3 flex items-center justify-between gap-4">
           <h2 className="text-lg font-semibold">同步</h2>
           <p className="text-xs text-muted-foreground">
-            worker 每 6 小时增量、每周全量，倒计时即为下一次自动执行的时间
+            worker 每 2 小时增量、每周全量，倒计时即为下一次自动执行的时间
           </p>
         </div>
         <SyncCards initial={syncState} />

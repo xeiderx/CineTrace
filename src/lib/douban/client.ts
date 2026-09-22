@@ -207,3 +207,62 @@ export function isBlocked(html: string): boolean {
 export function needsLogin(html: string): boolean {
   return /passport\.douban|登录后可见/.test(html) && !/subject\//.test(html);
 }
+
+/** 风控校验主机：跳到它上面就是真的被拦了。 */
+const SEC_HOST = "sec.douban.com";
+/** 登录主机：跳到这里是登录态失效，与风控无关。 */
+const PASSPORT_HOST = "passport.douban.com";
+
+/** 从 Location 头里解析主机名，解析失败返回 null。 */
+function locationHost(location: string | null, base: string): string | null {
+  if (!location) return null;
+  try {
+    return new URL(location, base).hostname;
+  } catch {
+    return null;
+  }
+}
+
+export type PageVerdict = "ok" | "blocked" | "login" | "redirect" | "error";
+
+/**
+ * 判定一次响应是正常、受限还是登录失效。
+ * 3xx 必须按 Location 的主机名细分：豆瓣的列表页偶尔会 302 回自身域做 URL 规范化
+ * （补斜杠、参数归一），那是无害的；只有跳到 sec/passport 才是真受限。
+ * 403 没有中间页可看，直接按受限处理。
+ */
+export function classifyPage(res: DoubanResponse): PageVerdict {
+  if (res.status >= 300 && res.status < 400) {
+    const host = locationHost(res.location, res.url);
+    if (host === SEC_HOST) return "blocked";
+    if (host === PASSPORT_HOST) return "login";
+    return "redirect";
+  }
+  if (res.status === 403) return "blocked";
+  if (res.status !== 200) return "error";
+  if (isBlocked(res.text)) return "blocked";
+  if (needsLogin(res.text)) return "login";
+  return "ok";
+}
+
+/**
+ * 跟随自身域的重定向（URL 规范化），返回第一个落地响应。
+ * 跳到 sec/passport 时立即收手，把受限页原样交回上层判定，
+ * 免得在风控页上继续打转。
+ */
+export async function reqFollow(url: string): Promise<DoubanResponse> {
+  let current = await req(url);
+  let hops = 0;
+  while (
+    current.status >= 300 &&
+    current.status < 400 &&
+    current.location &&
+    hops < MAX_REDIRECT_HOPS
+  ) {
+    const host = locationHost(current.location, current.url);
+    if (host === SEC_HOST || host === PASSPORT_HOST) break;
+    hops += 1;
+    current = await req(new URL(current.location, current.url).href);
+  }
+  return current;
+}

@@ -182,6 +182,14 @@ export function SyncCards({ initial }: { initial: SyncCardsState }) {
         const mine = activeMode === card.mode;
         const isRunning = busy || (progress?.running ?? false) || state.running;
 
+        // 风控退避提示只挂在增量卡上：自动轮的间隔是被它拉长的，
+        // 而用户看到的正是那张卡的倒计时。全量卡另有 72 小时冷却，
+        // 一并堆上去只会让提示串成一片，反而看不出重点。
+        const blockedHint =
+          card.mode === "incremental" && state.blocked
+            ? `检测到豆瓣限制访问${state.blockedAt > 0 ? `（${formatReadyAt(state.blockedAt)}）` : ""}，自动更新已临时放慢到 6 小时一轮，${formatReadyAt(state.nextIncrementalAutoAt)} 后重试`
+            : null;
+
         // 状态行只讲一件事：为什么不能点，或者下一步会发生什么
         let status: string;
         if (mine && progress?.error) status = progress.error;
@@ -235,6 +243,11 @@ export function SyncCards({ initial }: { initial: SyncCardsState }) {
               </div>
 
               <p className="text-xs text-muted-foreground">{card.hint}</p>
+              {blockedHint && (
+                <p className="rounded-md bg-amber-500/15 px-2 py-1 text-xs text-amber-600 dark:text-amber-400">
+                  {blockedHint}
+                </p>
+              )}
               <p className="text-xs text-muted-foreground">{status}</p>
             </CardContent>
           </Card>

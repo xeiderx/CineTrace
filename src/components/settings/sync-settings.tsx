@@ -29,7 +29,7 @@ const POLL_MS = 3000;
 
 /**
  * 豆瓣同步配置。这里只负责「怎么抓」，
- * 抓取动作本身由 worker 容器按 6 小时周期执行，
+ * 抓取动作本身由 worker 容器按 2 小时周期执行，
  * 也可以点「立即同步」手动跑一轮（绕过自动同步开关与作息窗口）。
  */
 export function SyncSettings({
@@ -108,7 +108,7 @@ export function SyncSettings({
         <h2 className="text-base font-medium">豆瓣同步</h2>
         <p className="text-xs text-muted-foreground">
           抓取豆瓣「想看 / 在看 / 看过」三个列表，逐条匹配 TMDB 元数据后写入媒体库。
-          worker 容器每 6 小时执行一次：常规轮只看每个列表的最新一页，遇到已有条目
+          worker 容器每 2 小时执行一次：常规轮只看每个列表的最新一页，遇到已有条目
           即停，所以开销极小；每周做一次完整回扫，捡回你事后修改的老评分与短评。
           首次回扫条目多、耗时较长，若撞上作息窗口结束会自动中止并记下位置，
           下次从断点继续，不会整夜连续抓取。

@@ -7,13 +7,18 @@
 /** 两次手动全量之间的最小间隔 */
 export const MANUAL_FULL_COOLDOWN_MS = 72 * 60 * 60 * 1000;
 /** 两次手动增量之间的最小间隔 */
-export const MANUAL_INC_COOLDOWN_MS = 60 * 60 * 1000;
+export const MANUAL_INC_COOLDOWN_MS = 30 * 60 * 1000;
 /** 手动增量卡片的说明文案里用到的时长，与上面的常量同源 */
-export const MANUAL_INC_COOLDOWN_HINT = "1 小时";
+export const MANUAL_INC_COOLDOWN_HINT = "30 分钟";
 /** 两次全量回扫的最小间隔，与 douban-sync 内的 FULL_SYNC_INTERVAL_MS 一致 */
 export const FULL_SYNC_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
 /** 自动轮的间隔，与 douban-sync 任务的 intervalMs 一致 */
-export const AUTO_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000;
+export const AUTO_SYNC_INTERVAL_MS = 2 * 60 * 60 * 1000;
+/**
+ * 撞上风控后的退避间隔。某个列表首页直接被挡时，下一轮回退到 6 小时，
+ * 与 douban-sync 里 intervalMsOf 给出的值同源。
+ */
+export const BLOCKED_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 export type SyncMode = "full" | "incremental";
 
@@ -32,6 +37,14 @@ export type SyncCardsState = {
   manualFullReadyAt: number;
   /** 手动增量可再次使用的时刻 */
   manualIncrementalReadyAt: number;
+  /**
+   * 是否处于风控退避期：上一轮某个列表的首页直接被挡。
+   * 此时自动轮已从 2 小时临时放慢到 6 小时，卡片上要说清楚，
+   * 否则用户只会看到倒计时莫名变长。
+   */
+  blocked: boolean;
+  /** 最近一次被豆瓣挡下的时刻（毫秒），未处于退避期为 0 */
+  blockedAt: number;
 };
 
 /**

@@ -15,6 +15,12 @@ export type Job = {
   kind: string;
   /** 期望的执行间隔（毫秒）。到点且未被锁定才执行 */
   intervalMs: number;
+  /**
+   * 运行时决定基础间隔（毫秒），缺省用 intervalMs。给需要按当下状态
+   * 调整频率的任务用，目前只有豆瓣同步：撞上风控时临时退回长间隔。
+   * 只由调度器消费，runJob 不关心。
+   */
+  intervalMsOf?: () => number;
   /** 锁的存活时间，应大于任务最长可能耗时，防止提前过期被抢 */
   lockTtlMs: number;
   run: () => Promise<JobResult>;

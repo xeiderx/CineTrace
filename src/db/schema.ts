@@ -630,7 +630,7 @@ export const syncIssue = sqliteTable(
     /** 关联的豆瓣条目或作品 */
     refId: text("ref_id"),
     title: text("title"),
-    /** 'no_match' | 'low_score' | 'network' | 'parse' | 'blocked' */
+    /** 'no_match' | 'low_score' | 'network' | 'parse' | 'blocked' | 'login' */
     reason: text("reason").notNull(),
     detail: text("detail"),
     resolvedAt: integer("resolved_at", { mode: "timestamp" }),

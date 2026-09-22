@@ -5,6 +5,7 @@ import { getSetting } from "@/lib/settings";
 import { hasTmdbKey } from "@/lib/tmdb";
 import {
   AUTO_SYNC_INTERVAL_MS,
+  BLOCKED_SYNC_INTERVAL_MS,
   FULL_SYNC_INTERVAL_MS,
   MANUAL_FULL_COOLDOWN_MS,
   MANUAL_INC_COOLDOWN_MS,
@@ -18,7 +19,7 @@ import { deferIntoWindow } from "@/lib/window";
  * 两边拼起来才是完整的界面依据。
  *
  * 三个计时锚点各有出处，不要混用：
- * - 自动增量（每 6 小时轮）的起点是 sync_run 表里最近一次真正跑完的时间——
+ * - 自动增量（每 2 小时轮）的起点是 sync_run 表里最近一次真正跑完的时间——
  *   调度器每个 tick 也回读它，手动跑完顺带刷新，天然满足「手动后重新计时」。
  * - 自动全量的起点是 setting `douban.lastFullSyncAt`（只有整轮全量真跑完才写）。
  * - 手动全量的冷却同样对着 `douban.lastFullSyncAt` 算，
@@ -31,7 +32,7 @@ const SYNC_KIND = "douban-html";
 
 /** 读一个存 ISO 字符串的时间类配置；没写过或写坏了都当作「没有」 */
 function settingTime(
-  key: "douban.lastFullSyncAt" | "douban.lastManualIncAt",
+  key: "douban.lastFullSyncAt" | "douban.lastManualIncAt" | "douban.blockedAt",
 ): number | null {
   const raw = String(getSetting(key) ?? "").trim();
   if (!raw) return null;
@@ -69,23 +70,31 @@ export function getSyncCardsState(): SyncCardsState {
   const lastFinishedAt = latestFinishedAt();
   const lastFullSyncAt = settingTime("douban.lastFullSyncAt");
   const lastManualIncAt = settingTime("douban.lastManualIncAt");
+  const blockedAt = settingTime("douban.blockedAt");
+  // 退避只看 streak，与 douban-sync 的 intervalMsOf 同一判据：上轮某列表首页
+  // 直接被挡时自增，连着一整轮无阻跑完会清零。两边判据一致，倒计时才不会
+  // 报出一个调度器根本不打算执行的时刻。
+  const blocked = Number(getSetting("douban.blockedStreak") ?? 0) >= 1;
+  // 退避期那一轮的间隔由调度器按 6 小时算，倒计时得跟着走，否则会一直显示
+  // 「距自动更新 00:xx」而实际要等到 6 小时后。
+  const roundIntervalMs = blocked ? BLOCKED_SYNC_INTERVAL_MS : AUTO_SYNC_INTERVAL_MS;
 
-  // 下一轮自动同步在什么时候（见 Scheduler.tick）：每轮跑完起算 6 小时，
+  // 下一轮自动同步在什么时候（见 Scheduler.tick）：每轮跑完起算一个轮次间隔，
   // 到点再看作息窗口；逾期时下一个 tick 立刻补跑。因此不能一律按
-  // 「上次结束 + 6h」算——从没跑过（worker 刚起来）和已逾期这两种情况，
-  // 下一轮都是「马上」，而不是 6 小时后。
+  // 「上次结束 + 间隔」算——从没跑过（worker 刚起来）和已逾期这两种情况，
+  // 下一轮都是「马上」，而不是一个间隔之后。
   let plannedRoundAt = now;
   if (lastFinishedAt !== null) {
-    const due = lastFinishedAt + AUTO_SYNC_INTERVAL_MS;
+    const due = lastFinishedAt + roundIntervalMs;
     plannedRoundAt = due > now ? due : now;
   }
   // 到点时若在窗口外，调度器会把它顺延到下一个释放点。真正开跑的是顺延后的
   // 时刻，后面所有推算都得从它起算，否则会把「开窗前」的那段空等漏掉。
   const nextRoundAt = deferIntoWindow(plannedRoundAt);
 
-  /** 第 n 个 6 小时刻度（n 从 1 起）。每轮到点都会被顺延一次窗口，这里照做。 */
+  /** 第 n 个轮次刻度（n 从 1 起）。每轮到点都会被顺延一次窗口，这里照做。 */
   const tickAt = (n: number) =>
-    deferIntoWindow(nextRoundAt + n * AUTO_SYNC_INTERVAL_MS);
+    deferIntoWindow(nextRoundAt + n * roundIntervalMs);
 
   // 这一轮抓全量还是增量，取决于「跑它的那一刻距上次全量是否满一周」，
   // 与 runDoubanSync 里的 isFullSyncDue() 是同一个判定。
@@ -94,13 +103,13 @@ export function getSyncCardsState(): SyncCardsState {
     nextRoundAt - lastFullSyncAt >= FULL_SYNC_INTERVAL_MS;
 
   // 这一轮不是全量时，往后数到第一个「满一周」的刻度，就是下次全量。
-  // 刻度是 6 小时的整数倍，所以真正跑全量的是「满 7 天之后的第一个刻度」，
+  // 刻度是轮次间隔的整数倍，所以真正跑全量的是「满 7 天之后的第一个刻度」，
   // 而不是满 7 天那一刻——直接取满 7 天会早报几小时、倒计时归零后干等。
   const ticksToFull = Math.max(
     1,
     Math.ceil(
       ((lastFullSyncAt ?? 0) + FULL_SYNC_INTERVAL_MS - nextRoundAt) /
-        AUTO_SYNC_INTERVAL_MS,
+        roundIntervalMs,
     ),
   );
 
@@ -118,5 +127,7 @@ export function getSyncCardsState(): SyncCardsState {
     nextFullAutoAt: nextFullAuto,
     manualFullReadyAt: (lastFullSyncAt ?? 0) + MANUAL_FULL_COOLDOWN_MS,
     manualIncrementalReadyAt: (lastManualIncAt ?? 0) + MANUAL_INC_COOLDOWN_MS,
+    blocked,
+    blockedAt: blocked ? (blockedAt ?? 0) : 0,
   };
 }

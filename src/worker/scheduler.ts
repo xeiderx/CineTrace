@@ -1,7 +1,7 @@
 import { and, desc, eq, isNotNull } from "drizzle-orm";
 import { db } from "@/db";
 import { syncRun } from "@/db/schema";
-import { isWithinWindow, nextWindowReleaseAt } from "./throttle";
+import { isWithinWindow, nextWindowReleaseAt, randomInt } from "./throttle";
 import { runJob, type Job } from "./job";
 
 /** 调度器轮询间隔：每次 tick 只做轻量的时间比较，不做网络请求 */
@@ -13,6 +13,14 @@ const TICK_MS = 30_000;
  * 每 30 秒就会有一轮「插记录再删掉」的空转。用户改完设置后最多等这么久即生效。
  */
 const SKIP_RETRY_MS = 5 * 60_000;
+
+/**
+ * 轮次间隔的抖动比例（±25%）。固定间隔意味着每天的开跑时刻会稳定落在同一批钟点上，
+ * 时间一长就是很明显的机器特征；抖开之后「每 2 小时一次」在外部看来是
+ * 1.5~2.5 小时的不规则间隔。抖动幅度不宜再大：下限压太低会明显抬高请求密度，
+ * 反而离风控更近。
+ */
+const JITTER_RATIO = 0.25;
 
 type ScheduledJob = Job & {
   /** 受作息窗口与总开关约束的任务（即所有对外抓取任务） */
@@ -31,6 +39,13 @@ type ScheduledJob = Job & {
    * - 窗口外的释放点：见 tick 里对 isWithinWindow 的说明。
    */
   nextAttemptAt?: number;
+  /**
+   * 每轮实际使用的间隔（毫秒），由 tick 在任务跑完时算一次并记住。
+   * 不直接在判定处调 intervalMsOf：那个函数每 tick 都会重掷随机数，
+   * 于是「到点」这个判断会随掷骰子反复变卦，任务可能被无限推迟。
+   * 随机值必须在轮次结束时定一次，之后整个周期内不变。
+   */
+  nextIntervalMs?: number;
 };
 
 /**
@@ -116,7 +131,10 @@ export class Scheduler {
         if (job.nextAttemptAt && now < job.nextAttemptAt) {
           continue;
         }
-        if (job.lastFinishedAt && now - job.lastFinishedAt < job.intervalMs) {
+        // 本轮的间隔在上一轮结束时已定好（含抖动）；还没定过就现取一次基础值，
+        // 用于「服务重启后直接从 sync_run 恢复计时」这条路径。
+        const intervalMs = job.nextIntervalMs ?? job.intervalMsOf?.() ?? job.intervalMs;
+        if (job.lastFinishedAt && now - job.lastFinishedAt < intervalMs) {
           continue;
         }
         if (job.windowed && !isWithinWindow()) {
@@ -138,6 +156,11 @@ export class Scheduler {
         } else if (outcome.ran) {
           job.lastFinishedAt = Date.now();
           job.nextAttemptAt = undefined;
+          // 间隔在这里定一次并留着：基础值由任务按当下状态给出（如风控期退回 6 小时），
+          // 再揉 ±25% 抖动。此后整个周期都用这个数，不会每 tick 重掷。
+          const base = job.intervalMsOf?.() ?? job.intervalMs;
+          const swing = Math.round(base * JITTER_RATIO);
+          job.nextIntervalMs = base + randomInt(-swing, swing);
         }
       }
     } finally {
