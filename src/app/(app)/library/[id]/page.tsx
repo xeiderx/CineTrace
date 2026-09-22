@@ -94,43 +94,8 @@ function PlatformChip({ record }: { record: ViewRecordWithPlatform }) {
 }
 
 /**
- * 来源渠道小标签：显示「一级 › 二级」，有图片用图片、没有则用标识色圆点。
- * 只选了二级时把一级名一并带上，否则单看「彩虹岛」不知道是哪个大类下的站点。
+ * 单条观影流水的展示：状态、评分、时间、平台、剧集进度、短评与该次的标签
  */
-function SourceChannelChip({ record }: { record: ViewRecordWithPlatform }) {
-  if (!record.sourceChannelName) return null;
-
-  return (
-    <span className="inline-flex items-center gap-1.5 rounded-4xl bg-muted px-2 py-0.5 text-xs">
-      {record.sourceChannelIcon ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={record.sourceChannelIcon}
-          alt=""
-          className="size-3.5 rounded-sm object-contain"
-        />
-      ) : record.sourceChannelColor ? (
-        <span
-          aria-hidden
-          className="size-2 rounded-full"
-          style={{ backgroundColor: record.sourceChannelColor }}
-        />
-      ) : null}
-      {record.sourceChannelParentName ? (
-        <>
-          <span className="text-muted-foreground">
-            {record.sourceChannelParentName} ›
-          </span>
-          {record.sourceChannelName}
-        </>
-      ) : (
-        record.sourceChannelName
-      )}
-    </span>
-  );
-}
-
-/** 单条观影流水的展示：状态、评分、时间、平台、剧集进度、短评与该次的标签 */
 function ViewRecordItem({
   record,
   mediaType,
@@ -176,6 +141,12 @@ function ViewRecordItem({
           >
             {viewStatusLabel(record.status)}
           </span>
+          {/* 来源渠道跟在状态徽标旁：选中后就地折叠成纯图标，点图标再展开改 */}
+          <SourceChannelSelect
+            viewRecordId={record.id}
+            current={record.sourceChannelId}
+            sourceChannels={sourceChannels}
+          />
           <RatingStars value={record.rating} />
           <span className="text-xs text-muted-foreground">
             {record.watchedAt
@@ -185,7 +156,6 @@ function ViewRecordItem({
                 : "未填写日期"}
           </span>
           <PlatformChip record={record} />
-          <SourceChannelChip record={record} />
           {/* 豆瓣把它删掉/合并/转私密后本地仍留着这条流水，只是打上时间戳。
               清理与否由用户决定，因此只提示、不自动删。 */}
           {record.doubanRemovedAt ? (
@@ -507,10 +477,21 @@ export default async function WorkDetailPage({
               status={latest?.status ?? null}
               country={countries[0] ?? null}
               removedCount={records.filter((r) => r.doubanRemovedAt != null).length}
+              // 渠道控件就挂在状态徽标旁：两者都回答「现在是什么情况」，
+              // 摆在同一行才好对照；没有流水时无处可挂，退回下方提示
+              trailing={
+                latest ? (
+                  <SourceChannelSelect
+                    viewRecordId={latest.id}
+                    current={latest.sourceChannelId}
+                    sourceChannels={sourceChannels}
+                  />
+                ) : null
+              }
             />
           </div>
 
-          {/* 顶部只放「最新一次观看」的标签与来源渠道：两者都挂在某一次观看上，
+          {/* 顶部只放「最新一次观看」的标签：标签挂在某一次观看上，
               历史各刷的记在下方各自的流水上，避免互相矛盾的信息堆在一起。
               还没有任何流水时无处可挂，只提示去记一次观看。 */}
           {latest ? (
@@ -519,11 +500,6 @@ export default async function WorkDetailPage({
                 viewRecordId={latest.id}
                 attached={latest.tags}
                 allTags={allTags}
-              />
-              <SourceChannelSelect
-                viewRecordId={latest.id}
-                current={latest.sourceChannelId}
-                sourceChannels={sourceChannels}
               />
             </div>
           ) : (

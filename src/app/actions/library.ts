@@ -1368,8 +1368,14 @@ export async function currentDefaultPlatformName(): Promise<string | null> {
 /*                                 来源渠道                                     */
 /* -------------------------------------------------------------------------- */
 
-/** 图片 data URL 允许的 MIME。客户端已压缩到 128px，这里只做格式与体积兜底 */
-const ICON_DATA_PATTERN = /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/;
+/**
+ * 图片 data URL 允许的 MIME。客户端已压缩到 128px，这里只做格式与体积兜底。
+ *
+ * 也放行 SVG：预置的爱奇艺/优酷/腾讯视频图标就是内联 SVG，用户编辑这些渠道时
+ * 会把整串原样提交回来。SVG 放在 `<img src>` 里不执行脚本，风险与位图等同。
+ */
+const ICON_DATA_PATTERN =
+  /^data:image\/(png|jpeg|webp|svg\+xml);base64,[A-Za-z0-9+/=]+$/;
 /** 单张图片上限 400KB。压缩后典型值 8-20KB，超过说明客户端没压缩或被人手工构造 */
 const ICON_DATA_MAX_LENGTH = 400 * 1024;
 
@@ -1395,7 +1401,7 @@ export async function saveSourceChannelAction(
 
   const iconRaw = text(formData, "iconData");
   if (iconRaw && !ICON_DATA_PATTERN.test(iconRaw)) {
-    return { error: "图片格式不支持，请重新选择 PNG / JPEG / WebP 图片" };
+    return { error: "图片格式不支持，请重新选择 PNG / JPEG / WebP / SVG 图片" };
   }
   if (iconRaw && iconRaw.length > ICON_DATA_MAX_LENGTH) {
     return { error: "图片体积过大，请换一张更小的图片" };

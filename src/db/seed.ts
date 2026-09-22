@@ -75,22 +75,48 @@ async function seed() {
   console.log(`平台：${DEFAULT_PLATFORMS.length} 项已就绪`);
 
   /*
-   * 来源渠道只预置一级分类。（parent_id, name）唯一索引在 SQLite 里
-   * 拦不住一级重名（NULL 互不相等），所以这里按 name + parent_id IS NULL 显式查重。
+   * 来源渠道预置一级与「流媒体」下的三家二级。
+   * （parent_id, name）唯一索引在 SQLite 里拦不住一级重名（NULL 互不相等），
+   * 所以一级要按 name + parent_id IS NULL 显式查重；二级有父级参与，
+   * 唯一索引本身就能拦，但同样走显式查重以统一逻辑。
    */
+  let channelCount = 0;
   for (const c of DEFAULT_SOURCE_CHANNELS) {
-    const exists = db
+    let parent = db
       .select()
       .from(sourceChannel)
       .where(and(isNull(sourceChannel.parentId), eq(sourceChannel.name, c.name)))
       .get();
-    if (!exists) {
-      db.insert(sourceChannel)
+    if (!parent) {
+      parent = db
+        .insert(sourceChannel)
         .values({ name: c.name, color: c.color, sortOrder: c.sortOrder })
-        .run();
+        .returning()
+        .get();
+    }
+    channelCount += 1;
+
+    for (const child of c.children) {
+      const exists = db
+        .select()
+        .from(sourceChannel)
+        .where(and(eq(sourceChannel.parentId, parent.id), eq(sourceChannel.name, child.name)))
+        .get();
+      if (!exists) {
+        db.insert(sourceChannel)
+          .values({
+            name: child.name,
+            parentId: parent.id,
+            iconData: child.iconData,
+            color: child.color,
+            sortOrder: child.sortOrder,
+          })
+          .run();
+        channelCount += 1;
+      }
     }
   }
-  console.log(`来源渠道：${DEFAULT_SOURCE_CHANNELS.length} 个一级分类已就绪`);
+  console.log(`来源渠道：${channelCount} 个分类已就绪`);
 
   for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
     const exists = db.select().from(setting).where(eq(setting.key, key)).get();

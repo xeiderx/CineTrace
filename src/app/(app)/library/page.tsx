@@ -19,6 +19,7 @@ import { formatDate, parseStringList, tagChipStyle } from "@/lib/labels";
 import {
   listCountryFacets,
   listGenreFacets,
+  listSourceChannels,
   listWorksPage,
   type WorkFilters,
 } from "@/lib/queries";
@@ -43,6 +44,7 @@ export default async function LibraryPage({
     matchStatus: pick("match") ?? undefined,
     country: pick("country") ?? undefined,
     genre: pick("genre") ?? undefined,
+    channel: pick("channel") ?? undefined,
     removed: pick("removed") ?? undefined,
     sort: (pick("sort") as WorkFilters["sort"]) ?? "recent",
   };
@@ -60,6 +62,7 @@ export default async function LibraryPage({
       filters.matchStatus ||
       filters.country ||
       filters.genre ||
+      filters.channel ||
       filters.removed,
   );
 
@@ -73,6 +76,7 @@ export default async function LibraryPage({
   // 免得筛完一项后其它选项消失、反而不好改条件
   const countries = listCountryFacets();
   const genres = listGenreFacets();
+  const channels = listSourceChannels();
 
   return (
     <>
@@ -83,7 +87,11 @@ export default async function LibraryPage({
         <WorkSearchCreateDialog />
       </PageHeader>
 
-      <LibraryFilters countries={countries} genres={genres} />
+      <LibraryFilters
+        countries={countries}
+        genres={genres}
+        channels={channels}
+      />
 
       {result.total === 0 ? (
         <EmptyState
@@ -152,6 +160,7 @@ export default async function LibraryPage({
                         year={item.year}
                         status={item.latestStatus}
                         country={parseStringList(item.countries)[0] ?? null}
+                        channel={item.latestChannel}
                         removedCount={item.removedCount}
                       />
                       {progress ? (

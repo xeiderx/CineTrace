@@ -240,6 +240,11 @@ export type WorkFilters = {
   country?: string;
   /** 类型标签，精确匹配 genres 数组里的一项 */
   genre?: string;
+  /**
+   * 来源渠道 id。选一级大类时把它名下的二级一并算进来——只挂在二级上的流水
+   * 也该被「流媒体」这类大类筛出来，否则一级筛选形同虚设。
+   */
+  channel?: string;
   /** 只留含「豆瓣已移除」记录的作品，取值 DOUBAN_REMOVED_FILTER */
   removed?: string;
   sort?: "recent" | "rating" | "title" | "year";
@@ -316,8 +321,36 @@ export type WorkListItem = Work & {
   progress: ShowProgress | null;
   /** 名下带有「豆瓣已移除」标记的记录条数 */
   removedCount: number;
+  /** 最近一次观看挂的来源渠道，卡片上只显示图标；没有则为 null */
+  latestChannel: ChannelBadge | null;
   tags: Tag[];
 };
+
+/** 卡片/徽标行上展示渠道所需的最小信息 */
+export type ChannelBadge = {
+  icon: string | null;
+  color: string | null;
+  /** 「一级 › 二级」，只选二级时也带上大类名，鼠标悬停看得出是哪个大类下的 */
+  label: string;
+};
+
+/** 按渠道 id 组装展示用小对象，顺带补上一级大类名 */
+function channelBadge(
+  channelId: number | null | undefined,
+  channelById: Map<number, SourceChannel>,
+  channelNameById: Map<number, string>,
+): ChannelBadge | null {
+  if (channelId == null) return null;
+  const channel = channelById.get(channelId);
+  if (!channel) return null;
+  const parentName =
+    channel.parentId != null ? (channelNameById.get(channel.parentId) ?? null) : null;
+  return {
+    icon: channel.iconData,
+    color: channel.color,
+    label: parentName ? `${parentName} › ${channel.name}` : channel.name,
+  };
+}
 
 /** 取最近一次观看；`watchedAt` 为空时退化为 id 最大者 */
 export function latestRecord<T extends { watchedAt: string | null; id: number }>(
@@ -389,6 +422,19 @@ export function listWorks(filters: WorkFilters = {}): WorkListItem[] {
   if (filters.country) conditions.push(jsonArrayHas(work.countries, filters.country));
   if (filters.genre) conditions.push(jsonArrayHas(work.genres, filters.genre));
 
+  // 来源渠道：选中的可能是一级大类，此时要把它的二级一并纳入，
+  // 否则只标了「爱奇艺」的流水挂在大类「流媒体」下反而筛不出来
+  if (filters.channel) {
+    const channelId = Number.parseInt(filters.channel, 10);
+    if (Number.isFinite(channelId)) {
+      const node = listSourceChannels().find((item) => item.id === channelId);
+      const ids = node ? [node.id, ...node.children.map((c) => c.id)] : [channelId];
+      conditions.push(
+        sql`exists (select 1 from ${viewRecord} where ${viewRecord.workId} = ${work.id} and ${inArray(viewRecord.sourceChannelId, ids)})`,
+      );
+    }
+  }
+
   // 状态筛选作用于「是否看过某条记录」，用子查询表达更直观
   if (filters.status) {
     conditions.push(
@@ -450,6 +496,12 @@ export function listWorks(filters: WorkFilters = {}): WorkListItem[] {
     else tagsByRecord.set(row.viewRecordId, [row.tag]);
   }
 
+  // 卡片上的渠道图标只需要「最新一次观看」挂的那个，因此把全量渠道读进内存后按 id 取，
+  // 一张表几十条、且每条流水都带 parentId 要反查大类名，比按需查询省事
+  const allChannels = db.select().from(sourceChannel).all();
+  const channelById = new Map(allChannels.map((c) => [c.id, c]));
+  const channelNameById = new Map(allChannels.map((c) => [c.id, c.name]));
+
   const items: WorkListItem[] = works.map((w) => {
     const own = recordsByWork.get(w.id) ?? [];
     const latest = pickLatest(own);
@@ -469,6 +521,7 @@ export function listWorks(filters: WorkFilters = {}): WorkListItem[] {
       lastEpisodeAt: latestEpisodeDate(marks),
       progress: buildProgress(w, own, marks),
       removedCount: own.filter((r) => r.doubanRemovedAt != null).length,
+      latestChannel: channelBadge(latest?.sourceChannelId, channelById, channelNameById),
       tags: latest ? (tagsByRecord.get(latest.id) ?? []) : [],
     };
   });
@@ -568,12 +621,6 @@ export type ViewRecordWithPlatform = ViewRecord & {
   platformColor: string | null;
   platformIcon: string | null;
   isDefaultPlatform: boolean;
-  /** 这次观看指定的来源渠道；未指定时全为 null */
-  sourceChannelName: string | null;
-  sourceChannelIcon: string | null;
-  sourceChannelColor: string | null;
-  /** 所选渠道的上级一级分类名。选中的本身就是一级时为 null */
-  sourceChannelParentName: string | null;
   /** 挂在这一次观看上的标签。标签属于流水，不跨刷次共享 */
   tags: Tag[];
 };
@@ -650,42 +697,22 @@ export function getWorkDetail(workId: number): WorkDetail | null {
   const defaultPlatform = getDefaultPlatform();
 
   const rows = db
-    .select({ record: viewRecord, platform, channel: sourceChannel })
+    .select({ record: viewRecord, platform })
     .from(viewRecord)
     .leftJoin(platform, eq(platform.id, viewRecord.platformId))
-    .leftJoin(sourceChannel, eq(sourceChannel.id, viewRecord.sourceChannelId))
     .where(eq(viewRecord.workId, workId))
     .orderBy(desc(viewRecord.watchIndex), asc(viewRecord.id))
     .all();
 
-  /*
-   * 二级渠道要顺带显示所属一级名（如「PT站点 › 彩虹岛」）。
-   * 渠道表只有几十行，一次性读出来建映射，比自连接省事也更好读。
-   */
-  const channelNameById = new Map(
-    db
-      .select({ id: sourceChannel.id, name: sourceChannel.name })
-      .from(sourceChannel)
-      .all()
-      .map((c) => [c.id, c.name]),
-  );
-
-  const baseRecords: ViewRecordWithPlatform[] = rows.map(
-    ({ record, platform: p, channel }) => ({
-      ...record,
-      // 记录未指定平台时展示默认平台，且标注为「默认」
-      platformName: p?.name ?? defaultPlatform?.name ?? null,
-      platformColor: p?.color ?? defaultPlatform?.color ?? null,
-      platformIcon: p?.icon ?? defaultPlatform?.icon ?? null,
-      isDefaultPlatform: record.platformId == null,
-      sourceChannelName: channel?.name ?? null,
-      sourceChannelIcon: channel?.iconData ?? null,
-      sourceChannelColor: channel?.color ?? null,
-      sourceChannelParentName:
-        channel?.parentId != null ? channelNameById.get(channel.parentId) ?? null : null,
-      tags: [],
-    }),
-  );
+  const baseRecords: ViewRecordWithPlatform[] = rows.map(({ record, platform: p }) => ({
+    ...record,
+    // 记录未指定平台时展示默认平台，且标注为「默认」
+    platformName: p?.name ?? defaultPlatform?.name ?? null,
+    platformColor: p?.color ?? defaultPlatform?.color ?? null,
+    platformIcon: p?.icon ?? defaultPlatform?.icon ?? null,
+    isDefaultPlatform: record.platformId == null,
+    tags: [],
+  }));
 
   // 标签按流水取：每条记录只带自己那一次的标签，互不混淆
   const tagRows = db

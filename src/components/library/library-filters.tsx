@@ -1,9 +1,20 @@
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
-import { Search, X } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, Search, X } from "lucide-react";
 import { useState, useTransition } from "react";
+import { ChannelIcon } from "@/components/library/channel-icon";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -20,7 +31,8 @@ import {
   VIEW_STATUS_LABELS,
   VIEW_STATUS_ORDER,
 } from "@/lib/labels";
-import type { FacetItem } from "@/lib/queries";
+import type { FacetItem, SourceChannelNode } from "@/lib/queries";
+import { cn } from "@/lib/utils";
 
 const ALL = "all";
 
@@ -36,15 +48,116 @@ function facetLabel(item: FacetItem): string {
 }
 
 /**
+ * 来源渠道筛选。
+ *
+ * 渠道是两级的，若平铺成几十个选项会比其他下拉长出一截，因此这里默认只列一级大类，
+ * 二级全部收进子菜单——和详情页的选择器保持同一套展开逻辑。选中一级等于选中它整个大类
+ * （查询侧会把二级一并算进来）。
+ */
+function ChannelFilter({
+  channels,
+  value,
+  onChange,
+}: {
+  channels: SourceChannelNode[];
+  value: string;
+  onChange: (next: string | null) => void;
+}) {
+  const selected =
+    value === ALL
+      ? null
+      : channels.find((node) => String(node.id) === value) ??
+        channels.find((node) => node.children.some((c) => String(c.id) === value)) ??
+        null;
+  const selectedChild = selected?.children.find((c) => String(c.id) === value) ?? null;
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        aria-label="来源渠道筛选"
+        className={cn(
+          "inline-flex h-9 w-32 items-center gap-1.5 rounded-lg border border-input px-2.5 text-sm outline-none",
+          "transition-colors hover:bg-muted/50 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50",
+        )}
+      >
+        {selected ? (
+          <ChannelIcon
+            icon={selectedChild?.iconData ?? selected.iconData}
+            color={selectedChild?.color ?? selected.color}
+          />
+        ) : null}
+        <span className="truncate">
+          {selectedChild ? selectedChild.name : (selected?.name ?? "全部渠道")}
+        </span>
+        <ChevronDownIcon className="ml-auto size-4 shrink-0 text-muted-foreground" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent className="w-56">
+        <DropdownMenuItem onSelect={() => onChange(null)}>
+          <span className="text-muted-foreground">全部渠道</span>
+          {value === ALL ? (
+            <CheckIcon className="ml-auto size-4 text-muted-foreground" />
+          ) : null}
+        </DropdownMenuItem>
+
+        {channels.length > 0 ? <DropdownMenuSeparator /> : null}
+
+        {channels.map((node) => {
+          // 默认只列一级大类，二级收进子菜单——和详情页选择器同一套展开逻辑。
+          // 一级本身也能筛，所以子菜单里先放它的「整个大类」
+          const nodeActive = value === String(node.id);
+          return node.children.length > 0 ? (
+            <DropdownMenuSub key={node.id}>
+              <DropdownMenuSubTrigger>
+                <ChannelIcon icon={node.iconData} color={node.color} />
+                <span className="truncate">{node.name}</span>
+                {nodeActive ? <CheckIcon className="size-4" /> : null}
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="w-48">
+                <DropdownMenuItem onSelect={() => onChange(String(node.id))}>
+                  <ChannelIcon icon={node.iconData} color={node.color} />
+                  <span>整个大类</span>
+                  {nodeActive ? <CheckIcon className="ml-auto size-4" /> : null}
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                {node.children.map((child) => (
+                  <DropdownMenuItem
+                    key={child.id}
+                    onSelect={() => onChange(String(child.id))}
+                  >
+                    <ChannelIcon icon={child.iconData} color={child.color} />
+                    <span className="truncate">{child.name}</span>
+                    {value === String(child.id) ? (
+                      <CheckIcon className="ml-auto size-4" />
+                    ) : null}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          ) : (
+            <DropdownMenuItem key={node.id} onSelect={() => onChange(String(node.id))}>
+              <ChannelIcon icon={node.iconData} color={node.color} />
+              <span className="truncate">{node.name}</span>
+              {nodeActive ? <CheckIcon className="ml-auto size-4" /> : null}
+            </DropdownMenuItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/**
  * 档案库筛选栏：搜索词与下拉条件全部体现在 URL 上，便于分享与刷新保持。
  * 国家与类型两个下拉的取值来自库内实际分布，已按作品数由多到少排好。
  */
 export function LibraryFilters({
   countries,
   genres,
+  channels,
 }: {
   countries: FacetItem[];
   genres: FacetItem[];
+  channels: SourceChannelNode[];
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -57,6 +170,7 @@ export function LibraryFilters({
   const removed = searchParams.get("removed") ?? ALL;
   const country = searchParams.get("country") ?? ALL;
   const genre = searchParams.get("genre") ?? ALL;
+  const channel = searchParams.get("channel") ?? ALL;
   const sort = searchParams.get("sort") ?? "recent";
 
   const [draft, setDraft] = useState(q);
@@ -91,6 +205,7 @@ export function LibraryFilters({
     removed !== ALL ||
     country !== ALL ||
     genre !== ALL ||
+    channel !== ALL ||
     sort !== "recent";
 
   // 国家下拉平时只挂前 COUNTRY_TOP_COUNT 个，其余点「更多国家」再铺开。
@@ -250,6 +365,12 @@ export function LibraryFilters({
           ) : null}
         </SelectContent>
       </Select>
+
+      <ChannelFilter
+        channels={channels}
+        value={channel}
+        onChange={(v) => apply({ channel: v })}
+      />
 
       <Select value={sort} onValueChange={(v) => apply({ sort: v })}>
         <SelectTrigger className="h-9 w-32" aria-label="排序方式">

@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState, useState } from "react";
-import { Plus, Pencil } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, Plus, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import {
   createViewRecordAction,
@@ -9,6 +9,7 @@ import {
   updateViewRecordAction,
   type FormState,
 } from "@/app/actions/library";
+import { ChannelIcon, findChannel } from "@/components/library/channel-icon";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -19,14 +20,22 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
-  SelectGroup,
   SelectItem,
-  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -95,6 +104,22 @@ export function ViewRecordDialog({
   const seasonCap =
     seasons.find((s) => s.seasonNumber === progressSeason)?.episodeCount ?? null;
 
+  // 渠道下拉换成了 DropdownMenu，不再由 Radix Select 直接参与表单，改由本地状态
+  // 驱动隐藏字段提交，因此这里是受控的
+  const [channelValue, setChannelValue] = useState(
+    record?.sourceChannelId != null ? String(record.sourceChannelId) : NO_CHANNEL,
+  );
+  const channelId = channelValue === NO_CHANNEL ? null : Number.parseInt(channelValue, 10);
+  const selectedChannel =
+    channelId != null && Number.isFinite(channelId)
+      ? findChannel(sourceChannels ?? [], channelId)
+      : null;
+  const channelLabel = selectedChannel
+    ? selectedChannel.parentName
+      ? `${selectedChannel.parentName} › ${selectedChannel.channel.name}`
+      : selectedChannel.channel.name
+    : "未指定";
+
   // 被手动锁定、同步不会覆盖的字段（库里存字段名，这里换成中文展示）
   const lockedFields = parseManualFields(record?.manualFieldsJson);
   // 勾选后要恢复跟随豆瓣的字段，与「恢复」按钮的提交内容
@@ -138,9 +163,14 @@ export function ViewRecordDialog({
       open={open}
       onOpenChange={(next) => {
         setOpen(next);
-        // 打开时把受控季号拉回记录上的值，丢掉上次没保存的草稿
+        // 打开时把受控字段拉回记录上的值，丢掉上次没保存的草稿
         if (next) {
           setProgressSeason(record?.progressSeason ?? null);
+          setChannelValue(
+            record?.sourceChannelId != null
+              ? String(record.sourceChannelId)
+              : NO_CHANNEL,
+          );
           setUnlockFields([]);
           setDraftTags([]);
         }
@@ -247,36 +277,92 @@ export function ViewRecordDialog({
 
             <div className="space-y-2">
               <Label htmlFor="sourceChannelId">来源渠道</Label>
-              <Select
+              {/* 渠道是两级的，平铺会把下拉撑得很长，因此一级先列出来、二级收进子菜单；
+                  选中结果通过隐藏字段随主表单一起提交（DropdownMenu 不参与表单） */}
+              <input
+                type="hidden"
                 name="sourceChannelId"
-                defaultValue={
-                  record?.sourceChannelId != null
-                    ? String(record.sourceChannelId)
-                    : NO_CHANNEL
-                }
-              >
-                <SelectTrigger id="sourceChannelId" className="h-8 w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={NO_CHANNEL}>未指定</SelectItem>
-                  {sourceChannels?.map((node) => (
-                    // 一级分类本身也能选，因此每组里先放它自己，再列二级
-                    <SelectGroup key={node.id}>
-                      <SelectLabel>{node.name}</SelectLabel>
-                      <SelectItem value={String(node.id)}>
-                        {node.name}
-                        <span className="text-xs text-muted-foreground">（整个大类）</span>
-                      </SelectItem>
-                      {node.children.map((child) => (
-                        <SelectItem key={child.id} value={String(child.id)}>
-                          {child.name}
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  ))}
-                </SelectContent>
-              </Select>
+                value={channelValue}
+              />
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  id="sourceChannelId"
+                  className="flex h-8 w-full items-center justify-between gap-1.5 rounded-lg border border-input bg-transparent px-2.5 text-sm transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                >
+                  <span className="flex min-w-0 items-center gap-1.5 truncate">
+                    {selectedChannel ? (
+                      <ChannelIcon
+                        icon={selectedChannel.channel.iconData}
+                        color={selectedChannel.channel.color}
+                      />
+                    ) : null}
+                    <span className="truncate">{channelLabel}</span>
+                  </span>
+                  <ChevronDownIcon className="pointer-events-none size-4 shrink-0 text-muted-foreground" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent className="w-56">
+                  <DropdownMenuItem onSelect={() => setChannelValue(NO_CHANNEL)}>
+                    <span className="text-muted-foreground">未指定</span>
+                    {channelValue === NO_CHANNEL ? (
+                      <CheckIcon className="ml-auto size-4 text-muted-foreground" />
+                    ) : null}
+                  </DropdownMenuItem>
+
+                  {sourceChannels && sourceChannels.length > 0 ? (
+                    <DropdownMenuSeparator />
+                  ) : null}
+
+                  {sourceChannels?.map((node) =>
+                    // 一级分类本身也能选，所以子菜单里先放它自己，再列二级
+                    node.children.length > 0 ? (
+                      <DropdownMenuSub key={node.id}>
+                        <DropdownMenuSubTrigger>
+                          <ChannelIcon icon={node.iconData} color={node.color} />
+                          <span className="truncate">{node.name}</span>
+                          {channelValue === String(node.id) ? (
+                            <CheckIcon className="size-4" />
+                          ) : null}
+                        </DropdownMenuSubTrigger>
+                        <DropdownMenuSubContent className="w-48">
+                          <DropdownMenuItem
+                            onSelect={() => setChannelValue(String(node.id))}
+                          >
+                            <ChannelIcon icon={node.iconData} color={node.color} />
+                            <span>整个大类</span>
+                            {channelValue === String(node.id) ? (
+                              <CheckIcon className="ml-auto size-4" />
+                            ) : null}
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          {node.children.map((child) => (
+                            <DropdownMenuItem
+                              key={child.id}
+                              onSelect={() => setChannelValue(String(child.id))}
+                            >
+                              <ChannelIcon icon={child.iconData} color={child.color} />
+                              <span className="truncate">{child.name}</span>
+                              {channelValue === String(child.id) ? (
+                                <CheckIcon className="ml-auto size-4" />
+                              ) : null}
+                            </DropdownMenuItem>
+                          ))}
+                        </DropdownMenuSubContent>
+                      </DropdownMenuSub>
+                    ) : (
+                      <DropdownMenuItem
+                        key={node.id}
+                        onSelect={() => setChannelValue(String(node.id))}
+                      >
+                        <ChannelIcon icon={node.iconData} color={node.color} />
+                        <span className="truncate">{node.name}</span>
+                        {channelValue === String(node.id) ? (
+                          <CheckIcon className="ml-auto size-4" />
+                        ) : null}
+                      </DropdownMenuItem>
+                    ),
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
 
             <div className="space-y-2">

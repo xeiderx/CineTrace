@@ -1,4 +1,6 @@
+import type { ReactNode } from "react";
 import { Ban, CirclePause, Star, type LucideIcon } from "lucide-react";
+import { ChannelIcon } from "@/components/library/channel-icon";
 import { Badge } from "@/components/ui/badge";
 import { DOUBAN_REMOVED_LABEL, mediaTypeLabel, viewStatusLabel, viewStatusTone } from "@/lib/labels";
 import { posterUrl } from "@/lib/queries";
@@ -420,6 +422,8 @@ export function WorkMetaBadges({
   status,
   country,
   removedCount = 0,
+  channel,
+  trailing,
 }: {
   mediaType: string;
   year: number | null;
@@ -428,6 +432,13 @@ export function WorkMetaBadges({
   country?: string | null;
   /** 「豆瓣已移除」标记的流水条数，0 表示不展示 */
   removedCount?: number;
+  /**
+   * 最近一次观看的来源渠道。只显示图标不显示文字，鼠标悬停靠 title 补全名称，
+   * 图标紧贴状态徽标——两者都描述「这条作品现在怎么样」，摆在一起才好对照。
+   */
+  channel?: { icon: string | null; color: string | null; label: string | null } | null;
+  /** 追加在行尾的内容，详情页用它塞进可交互的来源渠道选择器 */
+  trailing?: ReactNode;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-1.5">
@@ -447,6 +458,15 @@ export function WorkMetaBadges({
           {viewStatusLabel(status)}
         </span>
       ) : null}
+      {channel && (channel.icon || channel.color) ? (
+        <span
+          className="inline-flex items-center"
+          title={channel.label ? `来源渠道：${channel.label}` : "来源渠道"}
+        >
+          <ChannelIcon icon={channel.icon} color={channel.color} />
+        </span>
+      ) : null}
+      {trailing}
       {removedCount > 0 ? (
         <span
           className="inline-flex h-5 items-center rounded-4xl bg-amber-500/15 px-2 text-xs font-medium text-amber-400"

@@ -253,7 +253,7 @@ function SourceChannelFormDialog({
               id={`${fieldId}-name`}
               name="name"
               defaultValue={item?.name ?? ""}
-              placeholder={parent ? "如：彩虹岛" : "如：PT站点"}
+              placeholder={parent ? "如：B站" : "如：PT站点"}
               required
               autoFocus
             />

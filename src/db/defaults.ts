@@ -12,14 +12,55 @@ export const DEFAULT_PLATFORMS = [
 ] as const;
 
 /**
- * 预置来源渠道一级分类（二级分类由用户自行添加）。
- * 只预置一级，不预置任何二级——各家 PT 站点/流媒体服务因人而异。
+ * 预置来源渠道的图标。
+ *
+ * 手绘的品牌标 SVG 直接内联成 data URL，不落盘也不外链：
+ * `public/` 在 Docker 镜像里是只读层，容器重建就没了；外链又会把
+ * 「NAS 上离线可用」这件事弄坏。图形只取品牌色 + 简化字形，够在小尺寸下认出来即可。
  */
-export const DEFAULT_SOURCE_CHANNELS = [
-  { name: "流媒体", color: "#5b9bd5", sortOrder: 0 },
-  { name: "PT站点", color: "#e0a458", sortOrder: 1 },
-  { name: "EMBY服", color: "#9b7bd5", sortOrder: 2 },
-] as const;
+const CHANNEL_ICON_IQIYI =
+  "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iNyIgZmlsbD0iIzAwREM1QSIvPjxwYXRoIGZpbGw9IiNmZmYiIGQ9Ik0xMSA5aDMuNHYxNEgxMXoiLz48Y2lyY2xlIGN4PSIxMi43IiBjeT0iNS42IiByPSIyLjIiIGZpbGw9IiNmZmYiLz48L3N2Zz4=";
+const CHANNEL_ICON_YOUKU =
+  "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iNyIgZmlsbD0iI0ZGNkEwMCIvPjxwYXRoIGZpbGw9IiNmZmYiIGQ9Ik0xMi41IDkuNWwxMC41IDYuNS0xMC41IDYuNXoiLz48L3N2Zz4=";
+const CHANNEL_ICON_TENCENT =
+  "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iNyIgZmlsbD0iIzE1OEJGNSIvPjxwYXRoIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2ZmZiIgc3Ryb2tlLXdpZHRoPSIyLjYiIHN0cm9rZS1saW5lam9pbj0icm91bmQiIGQ9Ik0xMy4yIDEwLjRsOC42IDUuNi04LjYgNS42eiIvPjwvc3ZnPg==";
+
+/** 二级来源渠道（必须挂在一级下，因此不再有 children） */
+export type DefaultSourceChannelChild = {
+  name: string;
+  color: string;
+  sortOrder: number;
+  iconData: string;
+};
+
+/** 一级来源渠道 */
+export type DefaultSourceChannel = {
+  name: string;
+  color: string;
+  sortOrder: number;
+  children: DefaultSourceChannelChild[];
+};
+
+/**
+ * 预置来源渠道。
+ *
+ * 一级只给最通用的三类；流媒体下的三家是大多数人都有的，顺手预置掉，
+ * 其余（PT 站点、EMBY 服下的具体站点）因人而异，留给用户自己加。
+ */
+export const DEFAULT_SOURCE_CHANNELS: DefaultSourceChannel[] = [
+  {
+    name: "流媒体",
+    color: "#5b9bd5",
+    sortOrder: 0,
+    children: [
+      { name: "爱奇艺", color: "#00dc5a", sortOrder: 0, iconData: CHANNEL_ICON_IQIYI },
+      { name: "优酷", color: "#ff6a00", sortOrder: 1, iconData: CHANNEL_ICON_YOUKU },
+      { name: "腾讯视频", color: "#158bf5", sortOrder: 2, iconData: CHANNEL_ICON_TENCENT },
+    ],
+  },
+  { name: "PT站点", color: "#e0a458", sortOrder: 1, children: [] },
+  { name: "EMBY服", color: "#9b7bd5", sortOrder: 2, children: [] },
+];
 
 /** 预置应用设置。key 用点分命名空间，值与前端表单一一对应。 */
 export const DEFAULT_SETTINGS = {
