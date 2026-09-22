@@ -12,8 +12,8 @@ import {
   tag,
   viewEpisode,
   viewRecord,
+  viewRecordTag,
   work,
-  workTag,
   type Person,
   type ViewRecord,
 } from "@/db/schema";
@@ -424,20 +424,14 @@ export async function createWorkFromTmdbAction(
  * 多季剧在库里占两行时（豆瓣每季一个条目，各季各自匹配就可能留下重复），
  * 重新绑定时会撞上 (mediaType, tmdbId) 唯一索引，此时该做的是合并不是报错。
  * 观影记录是 `onDelete: set null`，不显式改挂就会变成「未关联作品」；
- * 标签与片单是 `onDelete: cascade`，得先复制过去再删，否则跟着重复行一起没了。
+ * 片单是 `onDelete: cascade`，得先复制过去再删，否则跟着重复行一起没了。
+ *
+ * 标签不需要单独处理：它挂在观影流水上，上面的改挂把流水整条迁过去，
+ * 标签随流水保留，无需搬运。
  */
 function mergeWorkInto(sourceId: number, target: { id: number; title: string }): MatchState {
   db.transaction((tx) => {
     tx.update(viewRecord).set({ workId: target.id }).where(eq(viewRecord.workId, sourceId)).run();
-
-    const tags = tx
-      .select({ tagId: workTag.tagId })
-      .from(workTag)
-      .where(eq(workTag.workId, sourceId))
-      .all();
-    for (const { tagId } of tags) {
-      tx.insert(workTag).values({ workId: target.id, tagId }).onConflictDoNothing().run();
-    }
 
     const items = tx
       .select({
@@ -652,17 +646,47 @@ export async function getPersonProfileAction(
   };
 }
 
+/** 流水所属的作品 id，用于决定该刷新哪个详情页；流水未关联作品时为 undefined */
+function viewRecordWorkId(viewRecordId: number): number | undefined {
+  return (
+    db
+      .select({ workId: viewRecord.workId })
+      .from(viewRecord)
+      .where(eq(viewRecord.id, viewRecordId))
+      .get()?.workId ?? undefined
+  );
+}
+
 /**
- * 为作品挂上标签。已存在的标签直接复用，否则新建。
+ * 把标签名挂到指定观影流水上，同名标签复用已有记录，否则新建。
+ *
+ * 用于「新建流水时同一次提交内挂标签」：那时流水刚拿到 id，表单里只有标签名。
+ * 新标签不带颜色，颜色统一在标签管理页调整。
+ */
+function attachTagNames(viewRecordId: number, names: string[]): void {
+  for (const name of [...new Set(names.map((n) => n.trim()).filter(Boolean))]) {
+    const existing = db.select().from(tag).where(eq(tag.name, name)).get();
+    const tagId =
+      existing?.id ??
+      db.insert(tag).values({ name }).returning({ id: tag.id }).get().id;
+    db.insert(viewRecordTag).values({ viewRecordId, tagId }).onConflictDoNothing().run();
+  }
+}
+
+/**
+ * 为某一次观看挂上标签。已存在的标签直接复用，否则新建。
+ *
+ * 标签挂在观影流水上、不属于作品：同一部片一刷觉得「剧情不错」、二刷觉得
+ * 「不好看」，两个判断属于不同的观看行为，各挂各的才不会混成一堆。
  *
  * 同名标签直接复用现有记录，**不覆盖它已有的颜色**：
  * 颜色属于标签本体的属性，在标签管理页统一调整，
- * 这里顺手改色会让别处同标签的作品跟着变色。
+ * 这里顺手改色会让别处同标签的记录跟着变色。
  */
 export async function attachTagAction(formData: FormData): Promise<void> {
-  const workId = int(formData, "workId");
+  const viewRecordId = int(formData, "viewRecordId");
   const name = text(formData, "name");
-  if (workId == null || !name) return;
+  if (viewRecordId == null || !name) return;
 
   const color = text(formData, "color");
   const existing = db.select().from(tag).where(eq(tag.name, name)).get();
@@ -670,19 +694,27 @@ export async function attachTagAction(formData: FormData): Promise<void> {
     existing?.id ??
     db.insert(tag).values({ name, color }).returning({ id: tag.id }).get().id;
 
-  db.insert(workTag).values({ workId, tagId }).onConflictDoNothing().run();
-  refreshLibrary(workId);
+  db.insert(viewRecordTag)
+    .values({ viewRecordId, tagId })
+    .onConflictDoNothing()
+    .run();
+  refreshLibrary(viewRecordWorkId(viewRecordId));
 }
 
 export async function detachTagAction(formData: FormData): Promise<void> {
-  const workId = int(formData, "workId");
+  const viewRecordId = int(formData, "viewRecordId");
   const tagId = int(formData, "tagId");
-  if (workId == null || tagId == null) return;
+  if (viewRecordId == null || tagId == null) return;
 
-  db.delete(workTag)
-    .where(and(eq(workTag.workId, workId), eq(workTag.tagId, tagId)))
+  db.delete(viewRecordTag)
+    .where(
+      and(
+        eq(viewRecordTag.viewRecordId, viewRecordId),
+        eq(viewRecordTag.tagId, tagId),
+      ),
+    )
     .run();
-  refreshLibrary(workId);
+  refreshLibrary(viewRecordWorkId(viewRecordId));
 }
 
 /* -------------------------------------------------------------------------- */
@@ -758,7 +790,8 @@ export async function createViewRecordAction(
     .where(eq(viewRecord.workId, workId))
     .get();
 
-  db.insert(viewRecord)
+  const inserted = db
+    .insert(viewRecord)
     .values({
       workId,
       source: "manual",
@@ -776,7 +809,12 @@ export async function createViewRecordAction(
       progressEpisode,
       episodesWatched,
     })
-    .run();
+    .returning({ id: viewRecord.id })
+    .get();
+
+  // 标签挂在流水上，新建时这条流水还没有 id，没法像编辑那样即时挂载，
+  // 只能等落库拿到 id 后在同一次提交里补写关联。
+  attachTagNames(inserted.id, formData.getAll("tagNames").map(String));
 
   refreshLibrary(workId);
   return { ok: true };

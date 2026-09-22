@@ -226,7 +226,8 @@ export function TagManager({
       <div>
         <h2 className="text-base font-medium">标签</h2>
         <p className="text-xs text-muted-foreground">
-          给作品打自定义标签，如「陪家人看」「想看第二遍」。作品详情页可直接挂载。
+          给观看记录打自定义标签，如「陪家人看」「想看第二遍」。每次观看各挂各的，
+          详情页顶部改的是最新一次，历史刷次在自己的流水上改。
         </p>
       </div>
 
@@ -299,7 +300,7 @@ export function TagManager({
                   title={`删除标签「${item.name}」？`}
                   description={
                     count > 0
-                      ? `有 ${count} 部作品挂着这个标签，删除后标签会从作品上移除，作品本身不受影响。`
+                      ? `有 ${count} 条观看记录挂着这个标签，删除后标签会从这些记录上移除，记录本身不受影响。`
                       : "该标签还没有被使用，可以安全删除。"
                   }
                 />

@@ -19,8 +19,8 @@ import {
   tag,
   viewEpisode,
   viewRecord,
+  viewRecordTag,
   work,
-  workTag,
   type Platform,
   type Tag,
   type ViewRecord,
@@ -96,12 +96,12 @@ export function platformUsage(): Record<number, number> {
   return usage;
 }
 
-/** 各标签挂在多少部作品上 */
+/** 各标签挂在多少条观影流水上 */
 export function tagUsage(): Record<number, number> {
   const rows = db
-    .select({ id: workTag.tagId, value: sql<number>`count(*)` })
-    .from(workTag)
-    .groupBy(workTag.tagId)
+    .select({ id: viewRecordTag.tagId, value: sql<number>`count(*)` })
+    .from(viewRecordTag)
+    .groupBy(viewRecordTag.tagId)
     .all();
 
   const usage: Record<number, number> = {};
@@ -364,12 +364,18 @@ export function listWorks(filters: WorkFilters = {}): WorkListItem[] {
 
   const episodesByWork = episodeMarksByWork(workIds);
 
-  const tagRows = db
-    .select({ workId: workTag.workId, tag: tag })
-    .from(workTag)
-    .innerJoin(tag, eq(tag.id, workTag.tagId))
-    .where(inArray(workTag.workId, workIds))
-    .all();
+  // 标签挂在观影流水上，列表卡片只展示「最新一次观看」的标签，
+  // 因此先取出这批作品名下所有流水的标签，再按流水归组，最后落到最新那条上。
+  const recordIds = records.map((r) => r.id);
+  const tagRows =
+    recordIds.length === 0
+      ? []
+      : db
+          .select({ viewRecordId: viewRecordTag.viewRecordId, tag })
+          .from(viewRecordTag)
+          .innerJoin(tag, eq(tag.id, viewRecordTag.tagId))
+          .where(inArray(viewRecordTag.viewRecordId, recordIds))
+          .all();
 
   const recordsByWork = new Map<number, ViewRecord[]>();
   for (const record of records) {
@@ -379,11 +385,11 @@ export function listWorks(filters: WorkFilters = {}): WorkListItem[] {
     else recordsByWork.set(record.workId, [record]);
   }
 
-  const tagsByWork = new Map<number, Tag[]>();
+  const tagsByRecord = new Map<number, Tag[]>();
   for (const row of tagRows) {
-    const bucket = tagsByWork.get(row.workId);
+    const bucket = tagsByRecord.get(row.viewRecordId);
     if (bucket) bucket.push(row.tag);
-    else tagsByWork.set(row.workId, [row.tag]);
+    else tagsByRecord.set(row.viewRecordId, [row.tag]);
   }
 
   const items: WorkListItem[] = works.map((w) => {
@@ -405,7 +411,7 @@ export function listWorks(filters: WorkFilters = {}): WorkListItem[] {
       lastEpisodeAt: latestEpisodeDate(marks),
       progress: buildProgress(w, own, marks),
       removedCount: own.filter((r) => r.doubanRemovedAt != null).length,
-      tags: tagsByWork.get(w.id) ?? [],
+      tags: latest ? (tagsByRecord.get(latest.id) ?? []) : [],
     };
   });
 
@@ -504,6 +510,8 @@ export type ViewRecordWithPlatform = ViewRecord & {
   platformColor: string | null;
   platformIcon: string | null;
   isDefaultPlatform: boolean;
+  /** 挂在这一次观看上的标签。标签属于流水，不跨刷次共享 */
+  tags: Tag[];
 };
 
 /** `work.seasonsJson` 的一项，对应 TMDB `/tv/{id}` 的 `seasons[]`。 */
@@ -522,6 +530,7 @@ export type SeasonWithRecord = SeasonStats;
 export type WorkDetail = {
   work: Work;
   records: ViewRecordWithPlatform[];
+  /** 最新一次观看的标签。详情页顶部展示的就是它，与列表卡片口径一致 */
   tags: Tag[];
   /** 仅剧集非空；已按季号与观影记录、逐集记录合并 */
   seasons: SeasonWithRecord[];
@@ -584,22 +593,44 @@ export function getWorkDetail(workId: number): WorkDetail | null {
     .orderBy(desc(viewRecord.watchIndex), asc(viewRecord.id))
     .all();
 
-  const records: ViewRecordWithPlatform[] = rows.map(({ record, platform: p }) => ({
+  const baseRecords: ViewRecordWithPlatform[] = rows.map(({ record, platform: p }) => ({
     ...record,
     // 记录未指定平台时展示默认平台，且标注为「默认」
     platformName: p?.name ?? defaultPlatform?.name ?? null,
     platformColor: p?.color ?? defaultPlatform?.color ?? null,
     platformIcon: p?.icon ?? defaultPlatform?.icon ?? null,
     isDefaultPlatform: record.platformId == null,
+    tags: [],
   }));
 
-  const tags = db
-    .select({ tag })
-    .from(workTag)
-    .innerJoin(tag, eq(tag.id, workTag.tagId))
-    .where(eq(workTag.workId, workId))
-    .all()
-    .map((r) => r.tag);
+  // 标签按流水取：每条记录只带自己那一次的标签，互不混淆
+  const tagRows = db
+    .select({ viewRecordId: viewRecordTag.viewRecordId, tag })
+    .from(viewRecordTag)
+    .innerJoin(tag, eq(tag.id, viewRecordTag.tagId))
+    .where(
+      inArray(
+        viewRecordTag.viewRecordId,
+        rows.map((r) => r.record.id),
+      ),
+    )
+    .all();
+
+  const tagsByRecord = new Map<number, Tag[]>();
+  for (const row of tagRows) {
+    const bucket = tagsByRecord.get(row.viewRecordId);
+    if (bucket) bucket.push(row.tag);
+    else tagsByRecord.set(row.viewRecordId, [row.tag]);
+  }
+
+  const records = baseRecords.map((record) => ({
+    ...record,
+    tags: tagsByRecord.get(record.id) ?? [],
+  }));
+
+  // 顶部展示「最新一次观看」的标签，与档案库卡片口径一致
+  const latest = latestRecord(records);
+  const tags = latest?.tags ?? [];
 
   const episodes = episodeMarksByWork([workId]).get(workId) ?? [];
 

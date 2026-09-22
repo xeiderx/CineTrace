@@ -23,6 +23,7 @@ import {
 } from "@/components/library/work-card";
 import { EmptyState } from "@/components/layout/empty-state";
 import { BackButton } from "@/components/layout/back-button";
+import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import {
   DOUBAN_REMOVED_LABEL,
@@ -33,6 +34,7 @@ import {
   mediaTypeLabel,
   parseCast,
   parseStringList,
+  tagChipStyle,
   viewStatusLabel,
   viewStatusTone,
 } from "@/lib/labels";
@@ -88,14 +90,13 @@ function PlatformChip({ record }: { record: ViewRecordWithPlatform }) {
   );
 }
 
-/** 单条观影流水的展示：状态、评分、时间、平台、剧集进度与短评 */
+/** 单条观影流水的展示：状态、评分、时间、平台、剧集进度、短评与该次的标签 */
 function ViewRecordItem({
   record,
   mediaType,
   platforms,
   defaultPlatformName,
   seasons,
-  tags,
   allTags,
 }: {
   record: ViewRecordWithPlatform;
@@ -103,8 +104,7 @@ function ViewRecordItem({
   platforms: Platform[];
   defaultPlatformName: string | null;
   seasons: SeasonWithRecord[];
-  /** 作品已挂标签与全部标签，透传给弹窗里的标签选择区 */
-  tags: Tag[];
+  /** 全部标签，透传给弹窗里的标签选择区 */
   allTags: Tag[];
 }) {
   const progress = progressLabel({
@@ -164,6 +164,23 @@ function ViewRecordItem({
             {record.comment}
           </p>
         ) : null}
+
+        {/* 这一条流水自己的标签：一刷「剧情不错」、二刷「不好看」各挂各的，
+            不混到作品层面，因此每条记录单独展示 */}
+        {record.tags.length > 0 ? (
+          <div className="flex flex-wrap items-center gap-1.5">
+            {record.tags.map((t) => (
+              <Badge
+                key={t.id}
+                variant="secondary"
+                className="font-normal"
+                style={tagChipStyle(t.color)}
+              >
+                {t.name}
+              </Badge>
+            ))}
+          </div>
+        ) : null}
       </div>
 
       <div className="flex shrink-0 items-start gap-1">
@@ -174,7 +191,6 @@ function ViewRecordItem({
           defaultPlatformName={defaultPlatformName}
           seasons={seasons}
           record={record}
-          tags={tags}
           allTags={allTags}
         />
         <ConfirmDeleteButton
@@ -333,7 +349,9 @@ export default async function WorkDetailPage({
   const detail = getWorkDetail(Number(id));
   if (!detail) notFound();
 
-  const { work: item, records, tags, seasons, progress } = detail;
+  // 标签挂在流水上，详情页各处的标签都从 records 或 latest 上取，
+  // detail.tags 只是 latest.tags 的同义值，这里不再单独解构。
+  const { work: item, records, seasons, progress } = detail;
   const platforms = listPlatforms();
   const defaultPlatform = getDefaultPlatform();
   const allTags = listTags();
@@ -389,11 +407,14 @@ export default async function WorkDetailPage({
             platforms={platforms}
             defaultPlatformName={defaultPlatform?.name ?? null}
             seasons={seasons}
-            tags={tags}
             allTags={allTags}
           />
           <WorkMatchDialog workId={item.id} workTitle={item.title} />
-          <WorkFormDialog work={item} tags={tags} allTags={allTags} />
+          <WorkFormDialog
+            work={item}
+            latestRecord={latest ? { id: latest.id, tags: latest.tags } : null}
+            allTags={allTags}
+          />
           <ConfirmDeleteButton
             action={deleteWorkAction}
             id={item.id}
@@ -433,11 +454,20 @@ export default async function WorkDetailPage({
             />
           </div>
 
-          <WorkTagEditor
-            workId={item.id}
-            attached={tags}
-            allTags={allTags}
-          />
+          {/* 顶部只放「最新一次观看」的标签：标签属于某一次观看，
+              历史各刷的标签在下方各自的流水上，避免互相矛盾的标签堆在一起。
+              还没有任何流水时无处可挂，只提示去记一次观看。 */}
+          {latest ? (
+            <WorkTagEditor
+              viewRecordId={latest.id}
+              attached={latest.tags}
+              allTags={allTags}
+            />
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              还没有观影记录，标签需要挂在某一次观看上。
+            </p>
+          )}
 
           <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-sm text-muted-foreground">
             <span className="inline-flex items-center gap-1.5">
@@ -560,7 +590,6 @@ export default async function WorkDetailPage({
                 platforms={platforms}
                 defaultPlatformName={defaultPlatform?.name ?? null}
                 seasons={seasons}
-                tags={tags}
                 allTags={allTags}
               />
             ))}

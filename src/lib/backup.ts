@@ -9,8 +9,8 @@ import {
   user,
   viewEpisode,
   viewRecord,
+  viewRecordTag,
   work,
-  workTag,
   type NewWork,
 } from "@/db/schema";
 import { APP_VERSION } from "@/lib/version";
@@ -25,7 +25,13 @@ import { APP_VERSION } from "@/lib/version";
  */
 
 export const BACKUP_FORMAT = "cinetrace-backup";
-export const BACKUP_VERSION = 1;
+/**
+ * 备份格式版本。
+ * v2：标签挂载层级从「作品」下沉到「观影流水」，`workTags` 变为 `viewRecordTags`
+ * （以 viewRecord 的 sourceKey 关联）。导入 v1 文件时会把作品级标签折算到
+ * 该作品最新一条流水上，口径与迁移 0006 的存量回填一致。
+ */
+export const BACKUP_VERSION = 2;
 
 /**
  * work 的身份与匹配层。海报、简介、时长、分季结构等描述性字段不入备份——
@@ -94,7 +100,17 @@ export type BackupFile = {
     works: BackupWork[];
     viewRecords: BackupViewRecord[];
     viewEpisodes: BackupViewEpisode[];
-    workTags: { workKey: string; tagName: string }[];
+    /**
+     * v2 起：标签挂在观影流水上，用 flow 的 sourceKey 关联。
+     * 二刷三刷各自带自己的标签，不再像 v1 那样把标签挂在作品上。
+     */
+    viewRecordTags: { sourceKey: string; tagName: string }[];
+    /**
+     * v1 遗留字段：标签挂在作品上。只在导入 v1 备份时读取，
+     * 折算到该作品最新一条流水（口径与迁移 0006 的存量回填一致）。
+     * 导出时不再写入。
+     */
+    workTags?: { workKey: string; tagName: string }[];
     collections: { name: string; description: string | null; coverPath: string | null; sortOrder: number }[];
     collectionItems: { collectionName: string; workKey: string; sortOrder: number; note: string | null }[];
   };
@@ -108,7 +124,7 @@ export type ImportStats = {
   works: number;
   viewRecords: number;
   viewEpisodes: number;
-  workTags: number;
+  viewRecordTags: number;
   collections: number;
   collectionItems: number;
 };
@@ -229,12 +245,18 @@ export function exportBackup(): BackupFile {
     }))
     .filter((row) => row.workKey);
 
-  const workTags = db
-    .select({ workId: workTag.workId, tagId: workTag.tagId })
-    .from(workTag)
+  /*
+   * 流水标签：标签挂在观影流水上，用流水的 sourceKey 关联
+   * （sourceKey 在导入侧是幂等键，比自增 id 稳定）。
+   * 解析不到流水或标签的行直接丢弃，避免备份里出现无法归属的关联。
+   */
+  const viewRecordTags = db
+    .select({ sourceKey: viewRecord.sourceKey, tagId: viewRecordTag.tagId })
+    .from(viewRecordTag)
+    .innerJoin(viewRecord, eq(viewRecordTag.viewRecordId, viewRecord.id))
     .all()
-    .map((row) => ({ workKey: workIdToKey.get(row.workId) ?? "", tagName: tagIdToName.get(row.tagId) ?? "" }))
-    .filter((row) => row.workKey && row.tagName);
+    .map((row) => ({ sourceKey: row.sourceKey, tagName: tagIdToName.get(row.tagId) ?? "" }))
+    .filter((row) => row.sourceKey && row.tagName);
 
   const collectionItems = db
     .select()
@@ -274,7 +296,7 @@ export function exportBackup(): BackupFile {
       works,
       viewRecords,
       viewEpisodes,
-      workTags,
+      viewRecordTags,
       collections: db
         .select({
           name: collection.name,
@@ -324,6 +346,8 @@ export function parseBackupFile(raw: string): BackupFile {
       works: data.works,
       viewRecords: data.viewRecords,
       viewEpisodes: data.viewEpisodes ?? [],
+      viewRecordTags: data.viewRecordTags ?? [],
+      /* v1 老文件才有：导入时折算到该作品最新一条流水 */
       workTags: data.workTags ?? [],
       collections: data.collections ?? [],
       collectionItems: data.collectionItems ?? [],
@@ -345,7 +369,7 @@ export function importBackup(file: BackupFile): ImportStats {
     works: 0,
     viewRecords: 0,
     viewEpisodes: 0,
-    workTags: 0,
+    viewRecordTags: 0,
     collections: 0,
     collectionItems: 0,
   };
@@ -511,6 +535,8 @@ export function importBackup(file: BackupFile): ImportStats {
     }
 
     /* 观影记录：sourceKey 是天然幂等键 */
+    const viewRecordIdBySourceKey = new Map<string, number>();
+
     for (const row of d.viewRecords) {
       if (!row?.sourceKey) continue;
       const workId = row.workKey ? workIdByKey.get(row.workKey) ?? null : null;
@@ -537,10 +563,13 @@ export function importBackup(file: BackupFile): ImportStats {
           ? row.manualFieldsJson
           : "[]",
       };
-      tx.insert(viewRecord)
+      const saved = tx
+        .insert(viewRecord)
         .values({ ...values, sourceKey: row.sourceKey })
         .onConflictDoUpdate({ target: viewRecord.sourceKey, set: { ...values, updatedAt: new Date() } })
-        .run();
+        .returning({ id: viewRecord.id })
+        .get();
+      viewRecordIdBySourceKey.set(row.sourceKey, saved.id);
       stats.viewRecords += 1;
     }
 
@@ -575,12 +604,53 @@ export function importBackup(file: BackupFile): ImportStats {
     }
 
     /* 关联表：复合主键即幂等手段 */
-    for (const row of d.workTags) {
-      const workId = workIdByKey.get(row.workKey);
+    for (const row of d.viewRecordTags) {
+      const viewRecordId = viewRecordIdBySourceKey.get(row.sourceKey);
       const tagId = tagIdByName.get(row.tagName);
-      if (!workId || !tagId) continue;
-      tx.insert(workTag).values({ workId, tagId }).onConflictDoNothing().run();
-      stats.workTags += 1;
+      if (viewRecordId == null || tagId == null) continue;
+      tx.insert(viewRecordTag).values({ viewRecordId, tagId }).onConflictDoNothing().run();
+      stats.viewRecordTags += 1;
+    }
+
+    /*
+     * v1 备份兼容：那时候标签挂在作品上，现在要折算到该作品「最新一条流水」，
+     * 口径与迁移 0006 的存量回填保持一致（观看日期倒序，日期相同取 id 大的；
+     * 没有观看日期的排最后）。
+     */
+    if (d.workTags?.length) {
+      const latestRecordByWorkId = new Map<number, { id: number; watchedAt: string | null }>();
+      const isNewer = (
+        candidate: { id: number; watchedAt: string | null },
+        current: { id: number; watchedAt: string | null },
+      ) => {
+        const a = candidate.watchedAt ?? "";
+        const b = current.watchedAt ?? "";
+        return a > b || (a === b && candidate.id > current.id);
+      };
+
+      for (const row of d.viewRecords) {
+        if (!row?.sourceKey || !row.workKey) continue;
+        const viewRecordId = viewRecordIdBySourceKey.get(row.sourceKey);
+        const workId = workIdByKey.get(row.workKey);
+        if (viewRecordId == null || workId == null) continue;
+        const candidate = { id: viewRecordId, watchedAt: row.watchedAt ?? null };
+        const current = latestRecordByWorkId.get(workId);
+        if (!current || isNewer(candidate, current)) latestRecordByWorkId.set(workId, candidate);
+      }
+
+      for (const row of d.workTags) {
+        const workId = workIdByKey.get(row.workKey);
+        const tagId = tagIdByName.get(row.tagName);
+        if (workId == null || tagId == null) continue;
+        // 该作品一条流水都没有（例如仅「想看」）时无处可挂，跳过
+        const latestRecordId = latestRecordByWorkId.get(workId)?.id;
+        if (latestRecordId == null) continue;
+        tx.insert(viewRecordTag)
+          .values({ viewRecordId: latestRecordId, tagId })
+          .onConflictDoNothing()
+          .run();
+        stats.viewRecordTags += 1;
+      }
     }
 
     for (const row of d.collectionItems) {

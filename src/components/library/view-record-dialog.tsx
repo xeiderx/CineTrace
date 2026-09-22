@@ -46,6 +46,9 @@ const NO_SEASON = "__none__";
 /**
  * 新增 / 编辑一条观影流水。
  * 同一部作品再次观看就新增一条，刷次自动递增，即二刷三刷。
+ *
+ * 标签挂在这条流水上：编辑时改的是本条记录自己的标签（即时生效），
+ * 新建时本条还没落库，只能先把标签名攒在草稿里随主表单一起提交。
  */
 export function ViewRecordDialog({
   workId,
@@ -54,7 +57,6 @@ export function ViewRecordDialog({
   defaultPlatformName,
   seasons,
   record,
-  tags = [],
   allTags,
 }: {
   workId: number;
@@ -63,14 +65,15 @@ export function ViewRecordDialog({
   defaultPlatformName: string | null;
   /** 该剧 TMDB 的季列表；为空时季号只能手填。`episodeCount` 用于卡住手填集数的上限 */
   seasons: { seasonNumber: number; name: string; episodeCount?: number }[];
-  record?: ViewRecord;
-  /** 作品已挂的标签。标签挂在作品层，与单条流水无关，这里只是就近提供编辑入口 */
-  tags?: Tag[];
+  /** 编辑时传入这条流水。标签随流水一起取，由调用方从 `record.tags` 带过来 */
+  record?: ViewRecord & { tags?: Tag[] };
   /** 全部标签，供选择区挑选；不传则不显示标签区 */
   allTags?: Tag[];
 }) {
   const isEdit = Boolean(record);
   const [open, setOpen] = useState(false);
+  // 新建时这条流水还没有 id，标签只能先攒在本地，随主表单以 tagNames 提交
+  const [draftTags, setDraftTags] = useState<string[]>([]);
   const [state, formAction, pending] = useActionState<FormState, FormData>(
     isEdit ? updateViewRecordAction : createViewRecordAction,
     undefined,
@@ -131,6 +134,7 @@ export function ViewRecordDialog({
         if (next) {
           setProgressSeason(record?.progressSeason ?? null);
           setUnlockFields([]);
+          setDraftTags([]);
         }
       }}
     >
@@ -356,16 +360,24 @@ export function ViewRecordDialog({
             />
           </div>
 
-          {/* 标签挂在作品上，不属于这条流水，改动即时生效，
-              因此放在主表单里只是就近摆放，不参与本次提交。 */}
+          {/* 标签挂在这条流水上。编辑时本条已落库，挂/摘即时生效，放在这里只是就近摆放，
+              不参与本次提交；新建时本条还没有 id，标签名随主表单一起提交。 */}
           {allTags ? (
             <div className="space-y-2">
               <Label>标签</Label>
-              <WorkTagEditor
-                workId={workId}
-                attached={tags ?? []}
-                allTags={allTags}
-              />
+              {isEdit && record ? (
+                <WorkTagEditor
+                  viewRecordId={record.id}
+                  attached={record.tags ?? []}
+                  allTags={allTags}
+                />
+              ) : (
+                <WorkTagEditor
+                  draftNames={draftTags}
+                  onDraftChange={setDraftTags}
+                  allTags={allTags}
+                />
+              )}
             </div>
           ) : null}
 

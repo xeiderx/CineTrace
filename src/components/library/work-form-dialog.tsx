@@ -58,15 +58,18 @@ function joinCast(value: string | null | undefined): string {
  */
 export function WorkFormDialog({
   work,
-  tags,
+  latestRecord,
   allTags,
   open: controlledOpen,
   onOpenChange,
   showTrigger = true,
 }: {
   work?: Work;
-  /** 作品当前已挂的标签，仅编辑模式需要 */
-  tags?: Tag[];
+  /**
+   * 最新一次观看的流水（含它自己的标签）。标签挂在流水上，
+   * 编辑作品时能改的只有这一次的标签；一条流水都没有就没地方挂，引导去记一次观看。
+   */
+  latestRecord?: { id: number; tags: Tag[] } | null;
   /** 全部标签，供选择区挑选 */
   allTags?: Tag[];
   open?: boolean;
@@ -309,16 +312,28 @@ export function WorkFormDialog({
               />
             </div>
 
-            {/* 标签挂在作品上，与本次表单提交无关（即时生效），因此不动 updateWorkAction。
-                新建作品时还没有 workId，无法挂标签，只在编辑模式出现。 */}
+            {/* 标签挂在观影流水上，作品本身不存标签。这里改的是「最新一次观看」那条流水的
+                标签（即时生效，不动 updateWorkAction）。刚添加的作品可能一条流水都没有，
+                这时没有可挂的对象，引导用户去记一次观看。 */}
             {isEdit && work && allTags ? (
               <div className="space-y-2 sm:col-span-2">
                 <Label>标签</Label>
-                <WorkTagEditor
-                  workId={work.id}
-                  attached={tags ?? []}
-                  allTags={allTags}
-                />
+                {latestRecord ? (
+                  <>
+                    <WorkTagEditor
+                      viewRecordId={latestRecord.id}
+                      attached={latestRecord.tags}
+                      allTags={allTags}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      标签打在最新一次观看上。想看以前的刷次，去下方的观影记录里改。
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    还没有观影记录，标签需要挂在某一次观看上。先记一次观看再回来打标签。
+                  </p>
+                )}
               </div>
             ) : null}
           </div>

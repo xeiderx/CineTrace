@@ -372,13 +372,22 @@ export const tag = sqliteTable(
   (t) => [index("tag_name_idx").on(t.name)],
 );
 
-/** 作品 × 标签 多对多：一部作品可挂多个标签 */
-export const workTag = sqliteTable(
-  "work_tag",
+/**
+ * 观影流水 × 标签 多对多：一次观看可挂多个标签。
+ *
+ * 为什么挂在这里而不是作品上：同一部片一刷觉得「剧情不错」、二刷觉得「不好看」，
+ * 两个判断属于不同的观看行为，挂在作品上会混成一堆互相矛盾的标签。
+ * 挂到流水后，每条记录只表达「这一次」的感受。
+ *
+ * 注意 view_record.workId 是可空且 onDelete: set null 的，所以作品被删除时
+ * 流水仍在、标签也跟着流水保留，语义正常。
+ */
+export const viewRecordTag = sqliteTable(
+  "view_record_tag",
   {
-    workId: integer("work_id")
+    viewRecordId: integer("view_record_id")
       .notNull()
-      .references(() => work.id, { onDelete: "cascade" }),
+      .references(() => viewRecord.id, { onDelete: "cascade" }),
     tagId: integer("tag_id")
       .notNull()
       .references(() => tag.id, { onDelete: "cascade" }),
@@ -387,8 +396,8 @@ export const workTag = sqliteTable(
       .default(sql`(unixepoch())`),
   },
   (t) => [
-    primaryKey({ columns: [t.workId, t.tagId] }),
-    index("work_tag_tag_idx").on(t.tagId),
+    primaryKey({ columns: [t.viewRecordId, t.tagId] }),
+    index("view_record_tag_tag_idx").on(t.tagId),
   ],
 );
 
@@ -554,7 +563,6 @@ export const sessionRelations = relations(session, ({ one }) => ({
 export const workRelations = relations(work, ({ many }) => ({
   viewRecords: many(viewRecord),
   viewEpisodes: many(viewEpisode),
-  workTags: many(workTag),
   collectionItems: many(collectionItem),
 }));
 
@@ -562,12 +570,13 @@ export const viewEpisodeRelations = relations(viewEpisode, ({ one }) => ({
   work: one(work, { fields: [viewEpisode.workId], references: [work.id] }),
 }));
 
-export const viewRecordRelations = relations(viewRecord, ({ one }) => ({
+export const viewRecordRelations = relations(viewRecord, ({ one, many }) => ({
   work: one(work, { fields: [viewRecord.workId], references: [work.id] }),
   platform: one(platform, {
     fields: [viewRecord.platformId],
     references: [platform.id],
   }),
+  viewRecordTags: many(viewRecordTag),
 }));
 
 export const platformRelations = relations(platform, ({ many }) => ({
@@ -575,12 +584,15 @@ export const platformRelations = relations(platform, ({ many }) => ({
 }));
 
 export const tagRelations = relations(tag, ({ many }) => ({
-  workTags: many(workTag),
+  viewRecordTags: many(viewRecordTag),
 }));
 
-export const workTagRelations = relations(workTag, ({ one }) => ({
-  work: one(work, { fields: [workTag.workId], references: [work.id] }),
-  tag: one(tag, { fields: [workTag.tagId], references: [tag.id] }),
+export const viewRecordTagRelations = relations(viewRecordTag, ({ one }) => ({
+  viewRecord: one(viewRecord, {
+    fields: [viewRecordTag.viewRecordId],
+    references: [viewRecord.id],
+  }),
+  tag: one(tag, { fields: [viewRecordTag.tagId], references: [tag.id] }),
 }));
 
 export const collectionRelations = relations(collection, ({ many }) => ({
