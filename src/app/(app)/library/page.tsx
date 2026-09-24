@@ -6,6 +6,7 @@ import { ChannelIcon } from "@/components/library/channel-icon";
 import { ConfirmDeleteButton } from "@/components/library/confirm-delete-button";
 import { LibraryFilters } from "@/components/library/library-filters";
 import { LibraryPagination } from "@/components/library/library-pagination";
+import { LibraryScrollMemory } from "@/components/library/library-scroll-memory";
 import { WorkSearchCreateDialog } from "@/components/library/work-search-create-dialog";
 import {
   RatingStars,
@@ -81,6 +82,8 @@ export default async function LibraryPage({
 
   return (
     <>
+      <LibraryScrollMemory />
+
       <PageHeader
         title="档案库"
         description="所有作品与观影流水。一部作品反复观看会保留多刷记录。"

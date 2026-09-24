@@ -79,8 +79,10 @@ export function WorkMatchDialog({
       setConflict(null);
       toast.success(result?.message ?? "已重新绑定");
       setOpen(false);
-      // 作品被并进另一部后当前详情页已不存在，得跳到存留下来的那一部
-      if (result?.merged) router.push(`/library/${result.merged.workId}`);
+      // 作品被并进另一部后当前详情页已不存在，得跳到存留下来的那一部。
+      // 用 replace 而非 push：当前这条历史指向的是刚被删掉的作品，留着它下次
+      // 点「返回」就会撞上 404，替换掉才能一次退到档案库。
+      if (result?.merged) router.replace(`/library/${result.merged.workId}`);
     });
   }
 
