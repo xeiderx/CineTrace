@@ -555,16 +555,20 @@ async function runDoubanSync(options: DoubanSyncOptions = {}): Promise<JobResult
     setSetting("douban.blockedAt", new Date().toISOString());
   }
 
-  // 「豆瓣已移除」标记：只有这轮从第 1 页完整翻到末页的列表才敢做比对。
-  // 增量轮里的大列表只翻了首页就早停、续跑轮只翻后半段、被拒或出窗暂停时剩下的页没翻——
-  // 这些情况下 seenSourceKeys 都不是全量，拿去比对会大面积误标。
-  // 但「一页即全列表」的小列表（想看/在看常常只有几条）在增量轮同样是完整覆盖的，
-  // 它们会被上面的 reachedEnd 收进 traversedLists，于是这里不再要求 full——
-  // 用户的删除立刻就能反映到本地，不必等到下一次全量。
-  // 关掉同步的小列表压根没进 enabledLists，自然不会出现在 traversedLists 里，
-  // 也就不会把整个列表误判成「已移除」。
+  // 「豆瓣已移除」标记：只认「整轮全量、且一路跑完」的那一次比对。
+  //
+  // 直觉上「一页即全列表」的小列表（想看/在看常常只有几条）在增量轮也是完整覆盖的，
+  // 拿它们比对不会出错。但错在这里：候选集是按**本地 status** 筛的，
+  // 而本地 status 可能被手动改过、或被 `manual_fields_json` 锁住不再跟随豆瓣迁列表。
+  // 于是「本地仍在看、豆瓣已看完」的记录会被「在看」列表收进候选，
+  // 而这一轮增量在「看过」列表首页见到已知条目就早停了（见主循环里的 `!full && sawKnown`），
+  // 它根本没出现在 seenSourceKeys 里——一条正常的记录就被误标成已移除。
+  // 全量轮会翻到「看过」的末页，这样的记录一定能被见到，标记随之撤销；
+  // 这也正是「之前同步都正确、手动增量后才冒出标记」的原因。
+  // 收紧到全量后，标记的时效会从「立刻」退回「最多一周一次」——
+  // 这是刻意取舍：漏标只是晚几天提示，误标却是凭空捏造一个不存在的变动。
   let removedMarked = 0;
-  if (traversedLists.size > 0) {
+  if (full && stopped === null && traversedLists.size > 0) {
     removedMarked = markDoubanRemoved(seenSourceKeys, traversedLists);
   }
 

@@ -33,7 +33,9 @@ import {
 import { pendingMetadataWhere } from "@/lib/backup";
 import { DOUBAN_REMOVED_FILTER, PENDING_METADATA_FILTER } from "@/lib/labels";
 import {
+  activityAt,
   buildShowProgress,
+  compareByActivityDesc,
   type EpisodeMark,
   type ProgressRecordInput,
   type SeasonStats,
@@ -310,6 +312,10 @@ export type WorkListItem = Work & {
    * 口径与豆瓣「看过」一致，才能和同步区的对照行对上。
    */
   watchedCount: number;
+  /**
+   * 最近一次观看的日期，取「活动时间」（见 `activityAt`）。
+   * 正在追的那一季只有 `startedAt`，只认 `watchedAt` 会让卡片丢失这个日期。
+   */
   lastWatchedAt: string | null;
   latestStatus: string | null;
   /** 最近一条流水的 id。卡片上的状态快捷切换要拿它去改，不必再查一次库 */
@@ -363,17 +369,18 @@ function channelBadge(
   };
 }
 
-/** 取最近一次观看；`watchedAt` 为空时退化为 id 最大者 */
+/**
+ * 取最近一次观看：`watchedAt` / `finishedAt` / `startedAt` 里最晚的那个口径。
+ *
+ * 不能只看 `watchedAt`：豆瓣同步给「在看」条目只写 `startedAt`，
+ * 于是正在追的那一季会被还在原地、只看 `watchedAt` 的旧季压住，
+ * 卡片和详情页顶部展示的「最新一次」就回退了。
+ */
 export function latestRecord<T extends { watchedAt: string | null; id: number }>(
   records: T[],
 ): T | null {
   if (records.length === 0) return null;
-  return [...records].sort((a, b) => {
-    const left = a.watchedAt ?? "";
-    const right = b.watchedAt ?? "";
-    if (left !== right) return left < right ? 1 : -1;
-    return b.id - a.id;
-  })[0];
+  return [...records].sort(compareByActivityDesc)[0];
 }
 
 function pickLatest(records: ViewRecord[]): ViewRecord | null {
@@ -522,7 +529,7 @@ export function listWorks(filters: WorkFilters = {}): WorkListItem[] {
       viewCount: own.length,
       watchIndex: own.reduce((max, r) => Math.max(max, r.watchIndex), 1),
       watchedCount: own.filter((r) => r.status === "watched").length,
-      lastWatchedAt: latest?.watchedAt ?? null,
+      lastWatchedAt: latest ? activityAt(latest) : null,
       latestStatus: latest?.status ?? null,
       latestRecordId: latest?.id ?? null,
       latestRating: latest?.rating ?? null,
@@ -712,7 +719,7 @@ export function getWorkDetail(workId: number): WorkDetail | null {
     .from(viewRecord)
     .leftJoin(platform, eq(platform.id, viewRecord.platformId))
     .where(eq(viewRecord.workId, workId))
-    .orderBy(desc(viewRecord.watchIndex), asc(viewRecord.id))
+    .orderBy(asc(viewRecord.id))
     .all();
 
   const baseRecords: ViewRecordWithPlatform[] = rows.map(({ record, platform: p }) => ({
@@ -749,6 +756,10 @@ export function getWorkDetail(workId: number): WorkDetail | null {
     ...record,
     tags: tagsByRecord.get(record.id) ?? [],
   }));
+
+  // 流水按「活动时间」倒序展示：正在追的那季只有 `startedAt`，已看完的旧季却带着
+  // `watchedAt`，若按刷次或 id 排会把新一季沉到下面。口径与卡片上的「最近一次」一致。
+  records.sort(compareByActivityDesc);
 
   // 顶部展示「最新一次观看」的标签，与档案库卡片口径一致
   const latest = latestRecord(records);

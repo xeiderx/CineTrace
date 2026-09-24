@@ -115,17 +115,48 @@ export type ShowProgress = {
   completedSeasonCount: number;
 };
 
-/** 按 `watchedAt` 降序、`id` 降序取最近一条；与 queries.latestRecord 口径一致 */
+/**
+ * 一条流水的「活动时间」：`watchedAt` / `finishedAt` / `startedAt` 里最晚的那个。
+ *
+ * 豆瓣同步按条目落在哪个列表决定写哪一列——「在看」只写 `startedAt`，
+ * 「看过」写 `watchedAt`（并补 `finishedAt`），于是同一条流水上常常只有一个日期。
+ * 判断「最近一次观看」若只认 `watchedAt`，正在追的那季（只有 `startedAt`）
+ * 会被排到早已看完的旧季后面。三个日期都为空时返回 null。
+ */
+export function activityAt(record: {
+  watchedAt: string | null;
+  finishedAt?: string | null;
+  startedAt?: string | null;
+}): string | null {
+  let best: string | null = null;
+  for (const value of [record.watchedAt, record.finishedAt, record.startedAt]) {
+    const trimmed = value?.trim();
+    if (!trimmed) continue;
+    if (best === null || trimmed > best) best = trimmed;
+  }
+  return best;
+}
+
+/**
+ * 流水比较器：活动时间晚的在前，相同时 `id` 大的在前，日期全空的一律排在最后。
+ * 详情页的流水排序、`queries.latestRecord` 与这里的 `latestBy` 共用它，
+ * 保证「最近一次观看」在三处是同一个口径。
+ */
+export function compareByActivityDesc<
+  T extends { watchedAt: string | null; id: number },
+>(a: T, b: T): number {
+  const left = activityAt(a) ?? "";
+  const right = activityAt(b) ?? "";
+  if (left !== right) return left < right ? 1 : -1;
+  return b.id - a.id;
+}
+
+/** 按「最近活动」取最近一条；与 queries.latestRecord 口径一致 */
 function latestBy<T extends { watchedAt: string | null; id: number }>(
   rows: T[],
 ): T | null {
   if (rows.length === 0) return null;
-  return [...rows].sort((a, b) => {
-    const left = a.watchedAt ?? "";
-    const right = b.watchedAt ?? "";
-    if (left !== right) return left < right ? 1 : -1;
-    return b.id - a.id;
-  })[0];
+  return [...rows].sort(compareByActivityDesc)[0];
 }
 
 /** 取最早的 ISO 日期文本；忽略空值。ISO 文本按字典序比较即等价于按时间比较 */
