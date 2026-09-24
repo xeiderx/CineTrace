@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState, useState } from "react";
-import { CheckIcon, ChevronDownIcon, Plus, Pencil } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, Plus, Pencil, Star } from "lucide-react";
 import { toast } from "sonner";
 import {
   createViewRecordAction,
@@ -45,7 +45,7 @@ import {
   VIEW_STATUS_ORDER,
   viewRecordFieldLabel,
 } from "@/lib/labels";
-import { parseManualFields } from "@/lib/watch-progress";
+import { parseManualFields, todayIso } from "@/lib/watch-progress";
 import { WorkTagEditor } from "@/components/library/work-tag-editor";
 import type { Platform, Tag, ViewRecord } from "@/db/schema";
 import type { SourceChannelNode } from "@/lib/queries";
@@ -56,6 +56,73 @@ const USE_DEFAULT = "__default__";
 const NO_SEASON = "__none__";
 /** 来源渠道下拉的「未指定」哨兵值，同上由 action 落成 null */
 const NO_CHANNEL = "__no_channel__";
+
+/**
+ * 豆瓣式星级评分：五颗星，点第几颗就是几分；再点当前那颗即清空。
+ *
+ * 库里的 rating 是 1–5 的整数、允许留空，所以清空提交空串，由 action 落成 null。
+ * 星数同时用文字写出来，光靠颜色区分对色觉障碍不友好。
+ */
+function RatingPicker({
+  value,
+  onChange,
+}: {
+  value: number | null;
+  onChange: (next: number | null) => void;
+}) {
+  return (
+    <div className="flex h-8 items-center gap-1.5">
+      <input type="hidden" name="rating" value={value ?? ""} />
+      <div role="group" aria-label="评分" className="flex items-center gap-0.5">
+        {Array.from({ length: 5 }, (_, i) => i + 1).map((star) => {
+          const active = value != null && star <= value;
+          return (
+            <button
+              key={star}
+              type="button"
+              aria-label={`${star} 星`}
+              aria-pressed={value === star}
+              title={value === star ? `${star} 星（再点清除）` : `${star} 星`}
+              onClick={() => onChange(value === star ? null : star)}
+              className="rounded-sm p-0.5 outline-none transition-transform hover:scale-110 focus-visible:ring-2 focus-visible:ring-ring/50"
+            >
+              <Star
+                className={`size-5 ${
+                  active
+                    ? "fill-primary text-primary"
+                    : "fill-transparent text-muted-foreground/40"
+                }`}
+              />
+            </button>
+          );
+        })}
+      </div>
+      <span className="text-xs text-muted-foreground">
+        {value != null ? `${value} 星` : "未评分"}
+      </span>
+    </div>
+  );
+}
+
+/** 三个日期字段的草稿值，空串表示没填 */
+type DateDraft = { watchedAt: string; startedAt: string; finishedAt: string };
+
+/**
+ * 按状态带出今天的日期，省掉手填：看过补「标记 + 看完」，在看补「标记 + 开始」。
+ * 想看、搁置、弃看没有对应的观看日期，一律不动。
+ *
+ * 只补空字段，已有值不动——编辑一条旧流水时切换状态，不该把当初的日期改成今天。
+ * 自动填的值照常可手改，改了就以手填为准。
+ */
+function withStatusDates(status: string, current: DateDraft): DateDraft {
+  if (status !== "watched" && status !== "watching") return current;
+  const today = todayIso();
+  return {
+    watchedAt: current.watchedAt || today,
+    startedAt: status === "watching" ? current.startedAt || today : current.startedAt,
+    finishedAt: status === "watched" ? current.finishedAt || today : current.finishedAt,
+  };
+}
 
 /**
  * 新增 / 编辑一条观影流水。
@@ -96,6 +163,19 @@ export function ViewRecordDialog({
     isEdit ? updateViewRecordAction : createViewRecordAction,
     undefined,
   );
+
+  // 状态切换时会按状态自动补今天的日期，所以要受控
+  const [statusValue, setStatusValue] = useState<string>(record?.status ?? "watched");
+
+  // 星级评分是自绘控件，靠隐藏字段随表单提交，因此这里是受控的
+  const [ratingValue, setRatingValue] = useState<number | null>(record?.rating ?? null);
+
+  // 三个日期的草稿值；新建时留空，切换状态时按 withStatusDates 自动补今天
+  const [dateDraft, setDateDraft] = useState<DateDraft>({
+    watchedAt: record?.watchedAt ?? "",
+    startedAt: record?.startedAt ?? "",
+    finishedAt: record?.finishedAt ?? "",
+  });
 
   // 季号要跟着用户的选择走，才知道该用哪一季的集数去卡上限，
   // 所以这里是受控的（Radix Select 的 value 仍会随表单一起提交）。
@@ -166,6 +246,24 @@ export function ViewRecordDialog({
         setOpen(next);
         // 打开时把受控字段拉回记录上的值，丢掉上次没保存的草稿
         if (next) {
+          const nextStatus = record?.status ?? "watched";
+          setStatusValue(nextStatus);
+          setRatingValue(record?.rating ?? null);
+          setDateDraft(
+            // 新建时按默认状态先带出今天的日期，省掉手填；
+            // 编辑时把记录上的日期拉回来，缺哪个补哪个由用户切状态时再说
+            record
+              ? {
+                  watchedAt: record.watchedAt ?? "",
+                  startedAt: record.startedAt ?? "",
+                  finishedAt: record.finishedAt ?? "",
+                }
+              : withStatusDates(nextStatus, {
+                  watchedAt: "",
+                  startedAt: "",
+                  finishedAt: "",
+                }),
+          );
           setProgressSeason(record?.progressSeason ?? null);
           setChannelValue(
             record?.sourceChannelId != null
@@ -211,7 +309,12 @@ export function ViewRecordDialog({
               <Label htmlFor="status">状态</Label>
               <Select
                 name="status"
-                defaultValue={record?.status ?? "watched"}
+                value={statusValue}
+                onValueChange={(value) => {
+                  setStatusValue(value);
+                  // 切到「看过 / 在看」时顺手补上今天的日期，省掉手填
+                  setDateDraft((prev) => withStatusDates(value, prev));
+                }}
               >
                 <SelectTrigger id="status" className="h-8 w-full">
                   <SelectValue />
@@ -227,16 +330,8 @@ export function ViewRecordDialog({
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="rating">评分（1–5 星）</Label>
-              <Input
-                id="rating"
-                name="rating"
-                type="number"
-                min={1}
-                max={5}
-                defaultValue={record?.rating ?? ""}
-                placeholder="可留空"
-              />
+              <Label>评分</Label>
+              <RatingPicker value={ratingValue} onChange={setRatingValue} />
             </div>
 
             <div className="space-y-2">
@@ -245,7 +340,10 @@ export function ViewRecordDialog({
                 id="watchedAt"
                 name="watchedAt"
                 type="date"
-                defaultValue={record?.watchedAt ?? ""}
+                value={dateDraft.watchedAt}
+                onChange={(event) =>
+                  setDateDraft((prev) => ({ ...prev, watchedAt: event.target.value }))
+                }
               />
             </div>
 
@@ -372,7 +470,10 @@ export function ViewRecordDialog({
                 id="startedAt"
                 name="startedAt"
                 type="date"
-                defaultValue={record?.startedAt ?? ""}
+                value={dateDraft.startedAt}
+                onChange={(event) =>
+                  setDateDraft((prev) => ({ ...prev, startedAt: event.target.value }))
+                }
               />
             </div>
 
@@ -382,7 +483,10 @@ export function ViewRecordDialog({
                 id="finishedAt"
                 name="finishedAt"
                 type="date"
-                defaultValue={record?.finishedAt ?? ""}
+                value={dateDraft.finishedAt}
+                onChange={(event) =>
+                  setDateDraft((prev) => ({ ...prev, finishedAt: event.target.value }))
+                }
               />
             </div>
           </div>
