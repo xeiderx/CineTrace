@@ -4,6 +4,7 @@ import { ChannelIcon } from "@/components/library/channel-icon";
 import {
   DOUBAN_REMOVED_LABEL,
   mediaTypeLabel,
+  viewStatusGlyph,
   viewStatusLabel,
   viewStatusTone,
 } from "@/lib/labels";
@@ -211,12 +212,21 @@ const WATCH_BADGE_NUMERALS: Record<number, string> = {
 const WATCH_BADGE_NUMERAL_FONT = '"Ma Shan Zheng", "Geist", serif';
 
 /**
- * 刷次徽章：海报右上角的锯齿圆章，逆时针斜 30° 贴角。
+ * 刷次徽章：海报角上的锯齿圆章，逆时针斜 30° 贴角。
  *
  * 整枚章都画在 100×100 内切圆里，旋转不会超出视框，
  * 因此外层海报容器的 `overflow-hidden`（圆角卡片要用）不会切掉章体。
+ *
+ * 贴角方向随 `corner` 翻转：右角是 -30°，左角镜像成 +30°，
+ * 章体才会朝卡片内侧倾，否则会像被贴歪了。
  */
-function WatchBadge({ watchIndex }: { watchIndex: number }) {
+function WatchBadge({
+  watchIndex,
+  corner = "right",
+}: {
+  watchIndex: number;
+  corner?: "left" | "right";
+}) {
   const tier = watchBadgeTier(watchIndex);
   if (!tier) return null;
   const numeral = WATCH_BADGE_NUMERALS[watchIndex] ?? "N";
@@ -225,10 +235,12 @@ function WatchBadge({ watchIndex }: { watchIndex: number }) {
       viewBox="0 0 100 100"
       role="img"
       aria-label={`第 ${watchIndex} 刷`}
-      className="pointer-events-none absolute top-0 right-0 aspect-square w-[32%]"
+      className={`pointer-events-none absolute top-0 aspect-square w-[32%] ${
+        corner === "left" ? "left-0" : "right-0"
+      }`}
     >
       <title>{`第 ${watchIndex} 刷`}</title>
-      <g transform="rotate(-30 50 50)">
+      <g transform={`rotate(${corner === "left" ? 30 : -30} 50 50)`}>
         {/*
           章面：齿环直接填成半透明深墨，海报的明暗从底下透上来（参考图那种
           「像透明」的质感就是这么来的），但压得够重，章体在任何海报上都有自己的底。
@@ -369,7 +381,8 @@ function WatchBadge({ watchIndex }: { watchIndex: number }) {
  * 传了 `status` 且为搁置/弃看时，封面上会叠一层降饱和与状态角标；
  * 其他状态（含 null）保持原样，所以档案库那几处调用不受影响。
  *
- * `watchIndex` ≥ 2 时在右上角贴一枚刷次徽章；首刷不显示，免得每张海报都挂章。
+ * `watchIndex` ≥ 2 时在角上贴一枚刷次徽章；首刷不显示，免得每张海报都挂章。
+ * 徽章默认贴右上角，档案库要跟左上角的状态单字错开，因此用 `watchBadgeCorner` 改贴左边。
  */
 export function WorkPoster({
   title,
@@ -377,6 +390,7 @@ export function WorkPoster({
   className,
   status,
   watchIndex,
+  watchBadgeCorner = "right",
 }: {
   title: string;
   posterPath: string | null;
@@ -384,6 +398,8 @@ export function WorkPoster({
   status?: string | null;
   /** 刷到第几刷，1 或未传时不显示徽章 */
   watchIndex?: number;
+  /** 刷次徽章贴哪个角 */
+  watchBadgeCorner?: "left" | "right";
 }) {
   const src = posterUrl(posterPath);
   const decoration = status ? POSTER_STATUS_STYLES[status] : undefined;
@@ -414,7 +430,9 @@ export function WorkPoster({
           {decoration.label}
         </span>
       ) : null}
-      {watchIndex != null ? <WatchBadge watchIndex={watchIndex} /> : null}
+      {watchIndex != null ? (
+        <WatchBadge watchIndex={watchIndex} corner={watchBadgeCorner} />
+      ) : null}
     </div>
   );
 }
@@ -441,6 +459,8 @@ export function WorkMetaBadges({
   country,
   removedCount = 0,
   channel,
+  compactStatus = false,
+  statusSuffix,
   trailing,
 }: {
   /** 最近一次观看日期，列表卡片放在行首 */
@@ -456,11 +476,22 @@ export function WorkMetaBadges({
    * 图标紧贴状态徽标——两者都描述「这条作品现在怎么样」，摆在一起才好对照。
    */
   channel?: { icon: string | null; color: string | null; label: string | null } | null;
+  /**
+   * 状态只显示单字（看/追/想/搁/弃）。档案库卡片这一行还要放日期与「豆瓣已移除」，
+   * 写全称会把行撑爆；详情页有整行空间，保持全称不动。
+   */
+  compactStatus?: boolean;
+  /**
+   * 紧跟在状态徽标右边的补充说明。档案库用它放「至 S1E04」这类进度：
+   * 进度脱离状态单独成行时，读者得先看上一行才知道是在说哪部剧的进度，
+   * 贴在状态右边才是「这部剧，追到这儿」一句话读完。
+   */
+  statusSuffix?: ReactNode;
   /** 追加在行尾的内容，详情页用它塞进可交互的来源渠道选择器 */
   trailing?: ReactNode;
 }) {
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
+    <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
       {date ? <span className="text-xs text-muted-foreground">{date}</span> : null}
       {year ? (
         <span className="text-xs text-muted-foreground">{year}</span>
@@ -469,11 +500,24 @@ export function WorkMetaBadges({
         <span className="truncate text-xs text-muted-foreground">{country}</span>
       ) : null}
       {status ? (
-        <span
-          className={`inline-flex h-5 items-center rounded-4xl px-2 text-xs font-medium ${viewStatusTone(status)}`}
-        >
-          {viewStatusLabel(status)}
+        // 徽标与其后的进度必须待在一起换行，所以状态加后缀合成一个 flex 项；
+        // 拆成两个项时，行宽不够会把「至 S1E04」甩到下一行与徽标脱节
+        <span className="inline-flex items-center gap-1.5">
+          <span
+            className={`inline-flex h-5 items-center justify-center rounded-4xl font-medium ${viewStatusTone(status)} ${
+              compactStatus ? "w-5 text-xs" : "px-2 text-xs"
+            }`}
+            title={compactStatus ? viewStatusLabel(status) : undefined}
+          >
+            {compactStatus ? viewStatusGlyph(status) : viewStatusLabel(status)}
+          </span>
+          {statusSuffix ? (
+            <span className="text-xs text-muted-foreground">{statusSuffix}</span>
+          ) : null}
         </span>
+      ) : statusSuffix ? (
+        // 没有状态徽标时进度仍要能显示，否则零状态的剧会丢掉进度
+        <span className="text-xs text-muted-foreground">{statusSuffix}</span>
       ) : null}
       {channel && (channel.icon || channel.color) ? (
         <span
@@ -485,11 +529,16 @@ export function WorkMetaBadges({
       ) : null}
       {trailing}
       {removedCount > 0 ? (
-        <span
-          className="inline-flex h-5 items-center rounded-4xl bg-amber-500/15 px-2 text-xs font-medium text-amber-400"
-          title="最近一次同步时，这些记录已不在豆瓣列表上"
-        >
-          {DOUBAN_REMOVED_LABEL}
+        // 档案库卡片里占满整行，把「豆瓣已移除」挤到独立一行：它说的是同步状态
+        // 而不是这部片子怎么样，混在元信息里容易被误读。详情页一行够宽，
+        // 沿旧行为缀在行尾，免得在这一行的宽度上无谓地多占一行
+        <span className={compactStatus ? "w-full" : undefined}>
+          <span
+            className="inline-flex h-5 items-center rounded-4xl bg-amber-500/15 px-2 text-xs font-medium text-amber-400"
+            title="最近一次同步时，这些记录已不在豆瓣列表上"
+          >
+            {DOUBAN_REMOVED_LABEL}
+          </span>
         </span>
       ) : null}
     </div>

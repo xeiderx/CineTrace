@@ -2,10 +2,10 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Film, Library as LibraryIcon } from "lucide-react";
 import { deleteWorkInListAction } from "@/app/actions/library";
+import { ChannelIcon } from "@/components/library/channel-icon";
 import { ConfirmDeleteButton } from "@/components/library/confirm-delete-button";
 import { LibraryFilters } from "@/components/library/library-filters";
 import { LibraryPagination } from "@/components/library/library-pagination";
-import { NextEpisodeButton } from "@/components/library/next-episode-button";
 import { WorkSearchCreateDialog } from "@/components/library/work-search-create-dialog";
 import {
   RatingStars,
@@ -24,7 +24,7 @@ import {
   listWorksPage,
   type WorkFilters,
 } from "@/lib/queries";
-import { nextEpisodeTarget, showProgressLabel } from "@/lib/watch-progress";
+import { libraryProgressLabel } from "@/lib/watch-progress";
 
 export const metadata: Metadata = { title: "档案库" };
 
@@ -121,21 +121,15 @@ export default async function LibraryPage({
               所以这里不设 3 列档——多一档就会在末行留出空位 */}
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 xl:grid-cols-5">
             {result.items.map((item) => {
-              // 进度文案优先用逐集记录派生的结果，它比手填列算得准；
-              // 带上状态是为了让弃看的剧说「弃看」而不是「追剧中」
+              // 进度文案只报位置（「至 S1E04」/「共 3 季 · 25 集」）；
+              // 状态另有元信息行的单字徽标表达，这里不再重复
               const progress = item.progress
-                ? showProgressLabel(item.progress, item.latestStatus)
+                ? libraryProgressLabel(item.progress)
                 : null;
-              // 弃看的剧不再往后推进度，卡片上就不挂「标记下一集」了
-              const nextEpisode =
-                item.progress && item.latestStatus !== "dropped"
-                  ? nextEpisodeTarget(item.progress)
-                  : null;
               return (
-                // 删除、标记下一集这两个按钮与链接是兄弟节点而非嵌套：
-                // 按钮放进 <Link> 内部时，点它会连带触发跳转，
-                // 键盘与读屏也会把它当成链接的一部分。
-                // 因此「进度 + 标记下一集」这一行连同标签行都放在链接之外。
+                // 删除按钮与链接是兄弟节点而非嵌套：按钮放进 <Link> 内部时，
+                // 点它会连带触发跳转，键盘与读屏也会把它当成链接的一部分。
+                // 因此「进度 + 标签」这一块都放在链接之外。
                 <div key={item.id} className="group relative flex flex-col gap-1.5">
                   <Link
                     href={`/library/${item.id}`}
@@ -146,10 +140,34 @@ export default async function LibraryPage({
                         title={item.title}
                         posterPath={item.posterPath}
                         watchIndex={item.watchIndex}
+                        // 刷次徽章挪到左上角，把右上角让给垃圾桶
+                        watchBadgeCorner="left"
                       />
-                      {item.latestRating ? (
-                        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-2 pb-1.5 pt-6">
-                          <RatingStars value={item.latestRating} />
+                      {/* 打分与来源渠道同处一条底部渐变栏，左右对齐 */}
+                      {item.latestRating || item.latestChannel ? (
+                        <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-2 bg-gradient-to-t from-black/80 to-transparent px-2 pb-1.5 pt-6">
+                          {item.latestRating ? (
+                            <RatingStars value={item.latestRating} />
+                          ) : (
+                            <span />
+                          )}
+                          {item.latestChannel ? (
+                            <span
+                              className="inline-flex shrink-0 items-center"
+                              title={
+                                item.latestChannel.label
+                                  ? `来源渠道：${item.latestChannel.label}`
+                                  : "来源渠道"
+                              }
+                            >
+                              <ChannelIcon
+                                icon={item.latestChannel.icon}
+                                color={item.latestChannel.color}
+                                size="lg"
+                                className="drop-shadow-[0_1px_2px_rgba(0,0,0,0.85)]"
+                              />
+                            </span>
+                          ) : null}
                         </div>
                       ) : null}
                     </div>
@@ -174,60 +192,52 @@ export default async function LibraryPage({
                           className="ml-auto size-3.5 shrink-0 text-muted-foreground"
                         />
                       </div>
-                      {/* 第二行：看过日期 + 看过状态 + 来源渠道图标，「豆瓣已移除」缀在行尾 */}
+                      {/* 第二行：看过日期 + 单字状态（看/追/想/搁/弃）+ 进度（至 S1E04），
+                          「豆瓣已移除」被挤到下一行。渠道图标已挪到海报右下角，这里不传 channel */}
                       <WorkMetaBadges
                         date={
                           item.lastWatchedAt ? formatDate(item.lastWatchedAt) : null
                         }
                         status={item.latestStatus}
-                        channel={item.latestChannel}
+                        compactStatus
+                        statusSuffix={progress}
                         removedCount={item.removedCount}
                       />
                     </div>
                   </Link>
 
-                  <div className="space-y-1.5">
-                    {/* 第三行：追剧进度；「标记下一集」靠右跟在同一行。
-                        进度文案用 flex-1 吃掉余量，按钮就贴在行尾。 */}
-                    {progress ? (
-                      <div className="flex items-center gap-2">
-                        <p className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-                          {progress}
-                        </p>
-                        {/* 正在追的剧给一个「标记下一集」的快捷入口，不必进详情页开面板。
-                            只标一集、日期取今天，要挑日期或跳集仍去详情页的分季面板。 */}
-                        {nextEpisode ? (
-                          <NextEpisodeButton
-                            workId={item.id}
-                            seasonNumber={nextEpisode.seasonNumber}
-                            episodeNumber={nextEpisode.episodeNumber}
-                            completesSeason={nextEpisode.completesSeason}
-                            nextSeasonName={nextEpisode.nextSeasonName}
-                            label={item.title}
-                          />
-                        ) : null}
-                      </div>
-                    ) : null}
-                    {/* 第四行：标签 */}
-                    {item.tags.length > 0 ? (
-                      <div className="flex flex-wrap gap-1 pt-0.5">
-                        {item.tags.slice(0, 3).map((t) => (
-                          <Badge
-                            key={t.id}
-                            variant="secondary"
-                            className="font-normal"
-                            style={tagChipStyle(t.color)}
-                          >
-                            {t.name}
-                          </Badge>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
+                  {/* 第三行：标签。字号比默认徽标小一号，一行大约排得下三个
+                      四字标签；超出的一律折叠成 +N，点进详情页再看全部 */}
+                  {item.tags.length > 0 ? (
+                    <div className="flex items-center gap-1">
+                      {item.tags.slice(0, 3).map((t) => (
+                        <Badge
+                          key={t.id}
+                          variant="secondary"
+                          className="h-4 max-w-[5rem] truncate px-1.5 py-0 text-[11px] font-normal"
+                          style={tagChipStyle(t.color)}
+                        >
+                          {t.name}
+                        </Badge>
+                      ))}
+                      {item.tags.length > 3 ? (
+                        <span
+                          className="shrink-0 text-[11px] text-muted-foreground"
+                          title={item.tags
+                            .slice(3)
+                            .map((t) => t.name)
+                            .join("、")}
+                        >
+                          +{item.tags.length - 3}
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : null}
 
                   {/* 桌面端悬停才现身，避免整屏卡片挂满垃圾桶；触屏没有 hover，
-                      用 group-focus-within 让键盘也能到达，并始终保留可点区域 */}
-                  <div className="absolute right-1.5 top-1.5 rounded-md bg-background/80 backdrop-blur transition-opacity focus-within:opacity-100 group-hover:opacity-100 md:opacity-0">
+                      用 group-focus-within 让键盘也能到达，并始终保留可点区域。
+                      底色用黑色半透明：海报明暗不一，半透明黑比纯色底更稳，也不抢眼 */}
+                  <div className="absolute right-1.5 top-1.5 rounded-md bg-black/50 backdrop-blur transition-opacity focus-within:opacity-100 group-hover:opacity-100 md:opacity-0">
                     <ConfirmDeleteButton
                       action={deleteWorkInListAction}
                       id={item.id}

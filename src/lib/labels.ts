@@ -17,6 +17,20 @@ export const VIEW_STATUS_LABELS: Record<ViewStatus, string> = {
   dropped: "弃看",
 };
 
+/**
+ * 状态徽标用的单字：看过=看、在看=追、想看=想、搁置=搁、弃看=弃。
+ *
+ * 档案库卡片的元信息行只有一行位置，写全称会把「日期 + 状态 + 移除标记」挤爆，
+ * 所以缩成一个字，靠配色区分。
+ */
+export const VIEW_STATUS_GLYPHS: Record<ViewStatus, string> = {
+  watched: "看",
+  watching: "追",
+  wish: "想",
+  on_hold: "搁",
+  dropped: "弃",
+};
+
 /** 状态的展示配色，用于徽标 */
 export const VIEW_STATUS_TONES: Record<ViewStatus, string> = {
   watched: "bg-emerald-500/15 text-emerald-400",
@@ -126,6 +140,11 @@ export function viewStatusLabel(value: string): string {
 
 export function viewStatusTone(value: string): string {
   return VIEW_STATUS_TONES[value as ViewStatus] ?? "bg-muted text-muted-foreground";
+}
+
+/** 状态单字；未知取值原样返回，避免脏数据渲染成空白 */
+export function viewStatusGlyph(value: string): string {
+  return VIEW_STATUS_GLYPHS[value as ViewStatus] ?? value;
 }
 
 /**

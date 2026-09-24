@@ -17,6 +17,22 @@ export function findChannel(sourceChannels: SourceChannelNode[], id: number) {
 }
 
 /**
+ * 尺寸档位：外层方框与兜底图标的边长。兜底图标比方框小一号，
+ * 免得 Layers 顶到边缘看起来像被裁了。
+ */
+const CHANNEL_ICON_BOX = {
+  sm: "size-4",
+  md: "size-5",
+  lg: "size-6",
+} as const;
+
+const CHANNEL_ICON_GLYPH = {
+  sm: "size-3",
+  md: "size-3.5",
+  lg: "size-4",
+} as const;
+
+/**
  * 来源渠道图标。
  *
  * 渠道可能上传了图片（data URL），也可能只设了标识色，两者都没有时用 Layers
@@ -33,11 +49,15 @@ export function ChannelIcon({
   icon: string | null;
   /** 渠道标识色，没有图片时用它给占位图标上色 */
   color: string | null;
-  /** sm 用于列表徽标与筛选 chip，md 用于详情页的徽标行与观影流水 */
-  size?: "sm" | "md";
+  /**
+   * sm 用于列表徽标与筛选 chip，md 用于详情页的徽标行与观影流水，
+   * lg 用于档案库卡片海报右下角——那里压在渐变条上，图标要压得住背景。
+   */
+  size?: "sm" | "md" | "lg";
   className?: string;
 }) {
-  const box = size === "md" ? "size-5" : "size-4";
+  const box = CHANNEL_ICON_BOX[size];
+  const glyph = CHANNEL_ICON_GLYPH[size];
 
   if (icon) {
     return (
@@ -60,7 +80,7 @@ export function ChannelIcon({
       )}
       style={color ? { color } : undefined}
     >
-      <Layers className={size === "md" ? "size-3.5" : "size-3"} />
+      <Layers className={glyph} />
     </span>
   );
 }

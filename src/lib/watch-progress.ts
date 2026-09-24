@@ -436,6 +436,45 @@ export function showProgressLabel(
   return null;
 }
 
+/** 集号补零成两位，`S2E08` 而不是 `S2E8` */
+function padEpisode(n: number): string {
+  return `${n}`.padStart(2, "0");
+}
+
+/**
+ * 档案库卡片上的进度文案。
+ *
+ * 与 `showProgressLabel` 的区别：档案库卡片的空间只够放一行，而状态已经由
+ * 元信息行的单字徽标表达，这里就不再重复「追剧中 / 弃看 / 搁置中」，只报位置：
+ * 没看完的剧给「至 S1E04」，看完的剧给「共 3 季 · 25 集」。
+ *
+ * 「至」取当前季已标记的最后一集，而不是全集的最大集号：跳集时后者会跳到
+ * 后面某一季，读起来像已经追到那儿了。
+ */
+export function libraryProgressLabel(progress: ShowProgress): string | null {
+  const { completed, totalCount, seasons, currentSeason } = progress;
+
+  if (completed) {
+    if (totalCount <= 0) return null;
+    // 没匹配上 TMDB 就没有分季结构，说不清有几季，只能报集数，
+    // 免得写成「共 0 季 · 12 集」
+    if (seasons.length === 0) return `共 ${totalCount} 集`;
+    // 单季也照报「共 1 季」，各张卡片的句式才统一，扫一列时好横向比较
+    return `共 ${seasons.length} 季 · ${totalCount} 集`;
+  }
+
+  // 当前季就是第一个没看完的季；它一集都没标时（例如刚标了「想看」），
+  // 退回到前面最后一个有进度的季，总比不显示强
+  const current = seasons.find((s) => s.seasonNumber === currentSeason);
+  const target =
+    current && current.lastWatched > 0
+      ? current
+      : [...seasons].reverse().find((s) => s.lastWatched > 0);
+  if (!target) return null;
+
+  return `至 S${padEpisode(target.seasonNumber)}E${padEpisode(target.lastWatched)}`;
+}
+
 /** 时间的展示后缀，标注这个日期是哪儿来的 */
 export function dateSourceHint(source: DateSource | null): string | null {
   if (source === "manual") return "手动";
