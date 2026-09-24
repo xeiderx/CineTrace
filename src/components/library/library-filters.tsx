@@ -42,6 +42,12 @@ const COUNTRY_TOP_COUNT = 10;
 /** 「更多国家」的哨兵值。它不是真的筛选项，任何情况下都不该落到 URL 上 */
 const SHOW_MORE_COUNTRIES = "__more_countries__";
 
+/** 类型下拉与国家同样只列前十个，其余收进「更多」——类型也有几十个，铺开一样碍事 */
+const GENRE_TOP_COUNT = 10;
+
+/** 「更多类型」的哨兵值，同「更多国家」，不落到 URL 上 */
+const SHOW_MORE_GENRES = "__more_genres__";
+
 /** 下拉里带数量的选项文案，如「恐怖 (23)」 */
 function facetLabel(item: FacetItem): string {
   return `${item.value} (${item.count})`;
@@ -76,7 +82,7 @@ function ChannelFilter({
       <DropdownMenuTrigger
         aria-label="来源渠道筛选"
         className={cn(
-          "inline-flex h-9 w-32 items-center gap-1.5 rounded-lg border border-input px-2.5 text-sm outline-none",
+          "inline-flex h-9 w-32 shrink-0 items-center gap-1.5 rounded-lg border border-input px-2.5 text-sm outline-none",
           "transition-colors hover:bg-muted/50 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50",
         )}
       >
@@ -176,6 +182,7 @@ export function LibraryFilters({
   const [draft, setDraft] = useState(q);
   const [syncedQuery, setSyncedQuery] = useState(q);
   const [showAllCountries, setShowAllCountries] = useState(false);
+  const [showAllGenres, setShowAllGenres] = useState(false);
 
   // 外部（如浏览器前进后退）改变 URL 时同步输入框。
   // 用渲染期比对代替 effect，避免级联渲染。
@@ -219,10 +226,23 @@ export function LibraryFilters({
       : topCountries;
   const hasMoreCountries = countries.length > COUNTRY_TOP_COUNT;
 
+  // 类型与国家同一套：平时只挂前十个，其余点「更多类型」再铺开；
+  // 选中的那个若不在前十，也得插进来，否则触发器找不到文案会显示空白
+  const topGenres = genres.slice(0, GENRE_TOP_COUNT);
+  const selectedGenre = genres.find((item) => item.value === genre);
+  const visibleGenres = showAllGenres
+    ? genres
+    : selectedGenre && !topGenres.includes(selectedGenre)
+      ? [...topGenres, selectedGenre]
+      : topGenres;
+  const hasMoreGenres = genres.length > GENRE_TOP_COUNT;
+
   return (
-    <div className="mb-6 flex flex-wrap items-center gap-2">
+    // 窄屏分两行：搜索独占一行，其余控件在下一行横向滑动——七八个下拉铺开要占三四行，
+    // 把列表顶下去一大截。宽屏空间够，回到自动换行一次看全。
+    <div className="mb-6 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
       <form
-        className="relative min-w-52 flex-1"
+        className="relative w-full sm:min-w-52 sm:flex-1"
         onSubmit={(event) => {
           event.preventDefault();
           apply({ q: draft.trim() || null });
@@ -251,150 +271,194 @@ export function LibraryFilters({
         ) : null}
       </form>
 
-      <Select value={mediaType} onValueChange={(v) => apply({ type: v })}>
-        <SelectTrigger className="h-9 w-28" aria-label="媒体类型筛选">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value={ALL}>全部媒体</SelectItem>
-          {Object.entries(MEDIA_TYPE_LABELS).map(([value, label]) => (
-            <SelectItem key={value} value={value}>
-              {label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      {/*
+        窄屏把这一排控件收进一条横向滑动的轨道，滑不到的头尾用负边距顶到屏幕边缘，
+        让人一眼看出右边还有内容。宽屏解除限制，照旧自动换行。
+      */}
+      <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-0.5 sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0 sm:pb-0">
+        <Select value={mediaType} onValueChange={(v) => apply({ type: v })}>
+          <SelectTrigger
+            className="h-9 w-28 shrink-0"
+            aria-label="媒体类型筛选"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL}>全部媒体</SelectItem>
+            {Object.entries(MEDIA_TYPE_LABELS).map(([value, label]) => (
+              <SelectItem key={value} value={value}>
+                {label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
 
-      <Select value={status} onValueChange={(v) => apply({ status: v })}>
-        <SelectTrigger className="h-9 w-28" aria-label="状态筛选">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value={ALL}>全部状态</SelectItem>
-          {VIEW_STATUS_ORDER.map((value) => (
-            <SelectItem key={value} value={value}>
-              {VIEW_STATUS_LABELS[value]}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+        <Select value={status} onValueChange={(v) => apply({ status: v })}>
+          <SelectTrigger className="h-9 w-28 shrink-0" aria-label="状态筛选">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL}>全部状态</SelectItem>
+            {VIEW_STATUS_ORDER.map((value) => (
+              <SelectItem key={value} value={value}>
+                {VIEW_STATUS_LABELS[value]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
 
-      <Select value={matchStatus} onValueChange={(v) => apply({ match: v })}>
-        <SelectTrigger className="h-9 w-28" aria-label="匹配状态筛选">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value={ALL}>全部匹配</SelectItem>
-          {MATCH_FILTER_OPTIONS.map((item) => (
-            <SelectItem key={item.value} value={item.value}>
-              {item.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-
-      <Select value={removed} onValueChange={(v) => apply({ removed: v })}>
-        <SelectTrigger className="h-9 w-28" aria-label="豆瓣标记筛选">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value={ALL}>全部条目</SelectItem>
-          <SelectItem value={DOUBAN_REMOVED_FILTER}>
-            {DOUBAN_REMOVED_LABEL}
-          </SelectItem>
-        </SelectContent>
-      </Select>
-
-      <Select value={genre} onValueChange={(v) => apply({ genre: v })}>
-        <SelectTrigger className="h-9 w-32" aria-label="类型筛选">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value={ALL}>全部类型</SelectItem>
-          {genres.map((item) => (
-            <SelectItem key={item.value} value={item.value}>
-              {facetLabel(item)}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-
-      <Select
-        value={country}
-        onValueChange={(v) => apply({ country: v })}
-        // 关掉下拉就把展开状态收回，下次打开还是精简列表
-        onOpenChange={(open) => {
-          if (!open) setShowAllCountries(false);
-        }}
-      >
-        <SelectTrigger className="h-9 w-32" aria-label="国家筛选">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value={ALL}>全部国家</SelectItem>
-          {visibleCountries.map((item) => (
-            <SelectItem key={item.value} value={item.value}>
-              {facetLabel(item)}
-            </SelectItem>
-          ))}
-          {hasMoreCountries && !showAllCountries ? (
-            <SelectItem
-              value={SHOW_MORE_COUNTRIES}
-              className="text-muted-foreground"
-              // 它只是个展开开关，不承担选中：Radix 在鼠标 pointerup / 触屏 click /
-              // 键盘 Enter 里才提交选中并关下拉，这里先拦掉默认行为，下拉就留在原地铺开
-              onPointerUp={(event) => {
-                if (event.pointerType === "mouse") {
-                  event.preventDefault();
-                  setShowAllCountries(true);
-                }
-              }}
-              onClick={(event) => {
-                event.preventDefault();
-                setShowAllCountries(true);
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  setShowAllCountries(true);
-                }
-              }}
-            >
-              {`更多国家 (${countries.length - visibleCountries.length})…`}
-            </SelectItem>
-          ) : null}
-        </SelectContent>
-      </Select>
-
-      <ChannelFilter
-        channels={channels}
-        value={channel}
-        onChange={(v) => apply({ channel: v })}
-      />
-
-      <Select value={sort} onValueChange={(v) => apply({ sort: v })}>
-        <SelectTrigger className="h-9 w-32" aria-label="排序方式">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="recent">最近观看</SelectItem>
-          <SelectItem value="rating">评分最高</SelectItem>
-          <SelectItem value="title">按片名</SelectItem>
-          <SelectItem value="year">按年份</SelectItem>
-        </SelectContent>
-      </Select>
-
-      {hasFilter ? (
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-9"
-          disabled={pending}
-          onClick={() => startTransition(() => router.replace("/library"))}
+        {/*
+          「豆瓣已移除」并进这个下拉，列在「自由添加」之后。它俩在 URL 上是两个参数
+          （removed 与 match），所以选中时要把另一个清掉，否则会叠成「既匹配又移除」的空结果。
+        */}
+        <Select
+          value={removed !== ALL ? removed : matchStatus}
+          onValueChange={(v) =>
+            v === DOUBAN_REMOVED_FILTER
+              ? apply({ removed: v, match: null })
+              : apply({ match: v, removed: null })
+          }
         >
-          重置
-        </Button>
-      ) : null}
+          <SelectTrigger className="h-9 w-28 shrink-0" aria-label="匹配状态筛选">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL}>全部匹配</SelectItem>
+            {MATCH_FILTER_OPTIONS.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            ))}
+            <SelectItem value={DOUBAN_REMOVED_FILTER}>
+              {DOUBAN_REMOVED_LABEL}
+            </SelectItem>
+          </SelectContent>
+        </Select>
+
+        <Select
+          value={genre}
+          onValueChange={(v) => apply({ genre: v })}
+          // 关掉下拉就把展开状态收回，下次打开还是精简列表
+          onOpenChange={(open) => {
+            if (!open) setShowAllGenres(false);
+          }}
+        >
+          <SelectTrigger className="h-9 w-32 shrink-0" aria-label="类型筛选">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL}>全部类型</SelectItem>
+            {visibleGenres.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {facetLabel(item)}
+              </SelectItem>
+            ))}
+            {hasMoreGenres && !showAllGenres ? (
+              <SelectItem
+                value={SHOW_MORE_GENRES}
+                className="text-muted-foreground"
+                // 与「更多国家」同一套：它只是展开开关，不承担选中，
+                // 先拦掉提交选中并关下拉的默认行为，下拉就留在原地铺开
+                onPointerUp={(event) => {
+                  if (event.pointerType === "mouse") {
+                    event.preventDefault();
+                    setShowAllGenres(true);
+                  }
+                }}
+                onClick={(event) => {
+                  event.preventDefault();
+                  setShowAllGenres(true);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    setShowAllGenres(true);
+                  }
+                }}
+              >
+                {`更多类型 (${genres.length - visibleGenres.length})…`}
+              </SelectItem>
+            ) : null}
+          </SelectContent>
+        </Select>
+
+        <Select
+          value={country}
+          onValueChange={(v) => apply({ country: v })}
+          // 关掉下拉就把展开状态收回，下次打开还是精简列表
+          onOpenChange={(open) => {
+            if (!open) setShowAllCountries(false);
+          }}
+        >
+          <SelectTrigger className="h-9 w-32 shrink-0" aria-label="国家筛选">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL}>全部国家</SelectItem>
+            {visibleCountries.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {facetLabel(item)}
+              </SelectItem>
+            ))}
+            {hasMoreCountries && !showAllCountries ? (
+              <SelectItem
+                value={SHOW_MORE_COUNTRIES}
+                className="text-muted-foreground"
+                // 它只是个展开开关，不承担选中：Radix 在鼠标 pointerup / 触屏 click /
+                // 键盘 Enter 里才提交选中并关下拉，这里先拦掉默认行为，下拉就留在原地铺开
+                onPointerUp={(event) => {
+                  if (event.pointerType === "mouse") {
+                    event.preventDefault();
+                    setShowAllCountries(true);
+                  }
+                }}
+                onClick={(event) => {
+                  event.preventDefault();
+                  setShowAllCountries(true);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    setShowAllCountries(true);
+                  }
+                }}
+              >
+                {`更多国家 (${countries.length - visibleCountries.length})…`}
+              </SelectItem>
+            ) : null}
+          </SelectContent>
+        </Select>
+
+        <ChannelFilter
+          channels={channels}
+          value={channel}
+          onChange={(v) => apply({ channel: v })}
+        />
+
+        <Select value={sort} onValueChange={(v) => apply({ sort: v })}>
+          <SelectTrigger className="h-9 w-32 shrink-0" aria-label="排序方式">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="recent">最近观看</SelectItem>
+            <SelectItem value="rating">评分最高</SelectItem>
+            <SelectItem value="title">按片名</SelectItem>
+            <SelectItem value="year">按年份</SelectItem>
+          </SelectContent>
+        </Select>
+
+        {hasFilter ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-9 shrink-0"
+            disabled={pending}
+            onClick={() => startTransition(() => router.replace("/library"))}
+          >
+            重置
+          </Button>
+        ) : null}
+      </div>
     </div>
   );
 }
