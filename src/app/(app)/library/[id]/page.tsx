@@ -13,6 +13,7 @@ import {
 } from "@/components/library/season-progress-panel";
 import { ViewRecordDialog } from "@/components/library/view-record-dialog";
 import { ViewRecordMatchDialog } from "@/components/library/view-record-match-dialog";
+import { WatchingStatusMenu } from "@/components/library/watching-status-menu";
 import { SourceChannelSelect } from "@/components/library/source-channel-select";
 import { WorkFormDialog } from "@/components/library/work-form-dialog";
 import { WorkMatchDialog } from "@/components/library/work-match-dialog";
@@ -40,6 +41,7 @@ import {
   tagChipStyle,
   viewStatusLabel,
   viewStatusTone,
+  type ViewStatus,
 } from "@/lib/labels";
 import {
   getDefaultPlatform,
@@ -219,6 +221,12 @@ function ViewRecordItem({
           workTitle={workTitle}
           mediaType={mediaType}
           progressSeason={record.progressSeason}
+        />
+        <WatchingStatusMenu
+          recordId={record.id}
+          status={record.status as ViewStatus}
+          label={`${workTitle} 第 ${record.watchIndex} 刷`}
+          size="icon-sm"
         />
         <ConfirmDeleteButton
           action={deleteViewRecordAction}

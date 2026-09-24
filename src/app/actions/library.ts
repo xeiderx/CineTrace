@@ -1330,7 +1330,7 @@ export async function setViewRecordStatusAction(
     .run();
 
   refreshLibrary(row.workId ?? undefined);
-  return { ok: true, message: `已改为${viewStatusLabel(status)}` };
+  return { ok: true, message: `已标为${viewStatusLabel(status)}` };
 }
 
 /* -------------------------------------------------------------------------- */

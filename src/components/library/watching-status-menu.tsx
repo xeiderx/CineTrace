@@ -26,22 +26,26 @@ const TARGETS: { value: ViewStatus; icon: typeof CirclePlay; hint: string }[] = 
 ];
 
 /**
- * 卡片上的状态快捷切换。
+ * 流水的状态快捷切换。
  *
- * 只出现在追剧页：在那儿「不想追了」是一念之间的事，不该逼用户进详情页开面板。
+ * 追剧页与作品详情页都用它：追剧页是「不想追了」的一念之间，详情页则是
+ * 那类豆瓣标成看过、实际没看完的条目唯一的改状态入口。
  * 菜单里列出的是除当前状态之外的目标，避免出现一个点了没反应的选项。
  */
 export function WatchingStatusMenu({
   recordId,
   status,
   label,
+  size = "icon-xs",
 }: {
-  /** 决定这条剧归到哪个标签页的那笔流水 */
+  /** 这条流水的主键 */
   recordId: number;
   /** 当前状态，用来决定菜单里显示哪些目标 */
   status: ViewStatus;
   /** 作品名，用于读屏文案 */
   label: string;
+  /** 触发按钮尺寸：追剧页卡片用 icon-xs，详情页操作区跟编辑/删除对齐用 icon-sm */
+  size?: "icon-xs" | "icon-sm";
 }) {
   const [pending, startTransition] = useTransition();
 
@@ -64,7 +68,7 @@ export function WatchingStatusMenu({
       <DropdownMenuTrigger asChild>
         <Button
           type="button"
-          size="icon-xs"
+          size={size}
           variant="ghost"
           disabled={pending}
           className="shrink-0 text-muted-foreground"
@@ -86,7 +90,7 @@ export function WatchingStatusMenu({
             >
               <span className="flex items-center gap-1.5">
                 <Icon className="size-3.5" />
-                改为{viewStatusLabel(target.value)}
+                 {viewStatusLabel(target.value)}
               </span>
               <span className="text-xs font-normal text-muted-foreground">
                 {target.hint}
