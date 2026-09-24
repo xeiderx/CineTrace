@@ -12,6 +12,7 @@ import {
   type PanelSeason,
 } from "@/components/library/season-progress-panel";
 import { ViewRecordDialog } from "@/components/library/view-record-dialog";
+import { ViewRecordMatchDialog } from "@/components/library/view-record-match-dialog";
 import { SourceChannelSelect } from "@/components/library/source-channel-select";
 import { WorkFormDialog } from "@/components/library/work-form-dialog";
 import { WorkMatchDialog } from "@/components/library/work-match-dialog";
@@ -100,6 +101,7 @@ function PlatformChip({ record }: { record: ViewRecordWithPlatform }) {
  */
 function ViewRecordItem({
   record,
+  workTitle,
   mediaType,
   platforms,
   defaultPlatformName,
@@ -108,6 +110,8 @@ function ViewRecordItem({
   sourceChannels,
 }: {
   record: ViewRecordWithPlatform;
+  /** 当前归属作品的片名，重新匹配时作搜索框默认值 */
+  workTitle: string;
   mediaType: string;
   platforms: Platform[];
   defaultPlatformName: string | null;
@@ -209,6 +213,12 @@ function ViewRecordItem({
           record={record}
           allTags={allTags}
           sourceChannels={sourceChannels}
+        />
+        <ViewRecordMatchDialog
+          recordId={record.id}
+          workTitle={workTitle}
+          mediaType={mediaType}
+          progressSeason={record.progressSeason}
         />
         <ConfirmDeleteButton
           action={deleteViewRecordAction}
@@ -626,6 +636,7 @@ export default async function WorkDetailPage({
               <ViewRecordItem
                 key={record.id}
                 record={record}
+                workTitle={item.title}
                 mediaType={item.mediaType}
                 platforms={platforms}
                 defaultPlatformName={defaultPlatform?.name ?? null}

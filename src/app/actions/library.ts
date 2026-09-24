@@ -3,7 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   collectionItem,
@@ -953,20 +953,92 @@ export async function deleteViewRecordAction(formData: FormData): Promise<void> 
 }
 
 /**
- * 换绑：把观影流水改挂到另一部作品上。
- * 用于「豆瓣条目匹配错了，手动指到正确的 TMDB 作品」。
+ * 按流水重新匹配：把这一条观影流水从当前作品上拆下来，改挂到正确的 TMDB 条目。
+ *
+ * 对应的是「手动错配」——比如把某部剧场版挂到了某部剧的某一季上，
+ * 现在要从剧里拆出去、重新指到那条剧场版。作品本身和其它流水都不动，
+ * 所以这里与 `matchWorkToTmdbAction` 不同：不覆盖 work 的元数据，
+ * 目标条目库里已有就直接挂过去，没有才按 TMDB 详情新建一条作品。
+ *
+ * 目标作品的季结构由 TMDB 详情决定；这条流水落在第几季由 `progressSeason` 决定，
+ * 电影一律落 null（无季可言）。换绑后把 `progressSeason` 记入 `manualFieldsJson`
+ * 锁定：豆瓣同步会按条目标题重新猜季号，不锁的话下一轮同步就把归属季改回去了。
  */
-export async function rebindViewRecordAction(formData: FormData): Promise<void> {
+export async function rematchViewRecordAction(
+  formData: FormData,
+): Promise<MatchState> {
   const id = int(formData, "id");
-  const workId = int(formData, "workId");
-  if (id == null || workId == null) return;
+  const tmdbId = int(formData, "tmdbId");
+  const mediaType = required(formData, "mediaType");
+  if (id == null || tmdbId == null) return { error: "缺少记录或 TMDB ID" };
+  if (mediaType !== "movie" && mediaType !== "tv") return { error: "类型只能是电影或剧集" };
 
   const row = db.select().from(viewRecord).where(eq(viewRecord.id, id)).get();
+  if (!row) return { error: "记录不存在" };
 
-  db.update(viewRecord).set({ workId }).where(eq(viewRecord.id, id)).run();
+  const existing = db
+    .select({ id: work.id, title: work.title })
+    .from(work)
+    .where(and(eq(work.mediaType, mediaType), eq(work.tmdbId, tmdbId)))
+    .get();
 
-  refreshLibrary(row?.workId ?? undefined);
-  refreshLibrary(workId);
+  let targetId: number;
+  let targetTitle: string;
+  if (existing) {
+    targetId = existing.id;
+    targetTitle = existing.title;
+  } else {
+    const detail = await tmdbDetail(mediaType, tmdbId);
+    if (!detail) return { error: "拉取 TMDB 详情失败，请确认 ID 是否正确" };
+    // 详情接口没有本地化标题，用搜索候选带过来的片名；极端情况下才退回 TMDB ID
+    const title = text(formData, "title") ?? detail.originalTitle ?? `TMDB ${tmdbId}`;
+    const inserted = db
+      .insert(work)
+      .values({ ...tmdbValues(mediaType, tmdbId, detail), title })
+      .returning({ id: work.id })
+      .get();
+    targetId = inserted.id;
+    targetTitle = title;
+  }
+
+  // 电影没有季的概念；剧集取表单填的季号，留空或非法一律当「未标记」
+  const seasonInput = int(formData, "progressSeason");
+  const progressSeason = mediaType === "tv" && seasonInput != null && seasonInput > 0 ? seasonInput : null;
+
+  // 刷次在「同一作品的同一季」内递增，换绑到已有流水的作品上要接着往下数，
+  // 否则会和目标作品上已有的记录撞成两个「第 1 刷」。
+  // 要排除这一条自己：把它指回原来的季时，它自己也是那个分组里的一员。
+  const maxRow = db
+    .select({ value: sql<number>`coalesce(max(${viewRecord.watchIndex}), 0)` })
+    .from(viewRecord)
+    .where(
+      and(
+        eq(viewRecord.workId, targetId),
+        ne(viewRecord.id, id),
+        progressSeason == null
+          ? isNull(viewRecord.progressSeason)
+          : eq(viewRecord.progressSeason, progressSeason),
+      ),
+    )
+    .get();
+
+  const locked = new Set(parseManualFields(row.manualFieldsJson));
+  locked.add("progressSeason");
+
+  db.update(viewRecord)
+    .set({
+      workId: targetId,
+      progressSeason,
+      watchIndex: (maxRow?.value ?? 0) + 1,
+      manualFieldsJson: JSON.stringify([...locked]),
+    })
+    .where(eq(viewRecord.id, id))
+    .run();
+
+  // 原作品那边少一条流水，目标作品多一条，两边都要刷新
+  refreshLibrary(row.workId ?? undefined);
+  refreshLibrary(targetId);
+  return { ok: true, message: `已改挂到《${targetTitle}》` };
 }
 
 /* -------------------------------------------------------------------------- */
