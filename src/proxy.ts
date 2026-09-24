@@ -16,10 +16,10 @@ export function proxy(request: NextRequest) {
   }
 
   if (pathname === "/login") {
-    // 已登录用户访问登录页，直接送回首页
-    if (hasCookie) {
-      return NextResponse.redirect(new URL("/", request.url));
-    }
+    // 登录页一律放行，纯客户端跳转由页面自己判断。
+    // 这里不能凭「Cookie 存在」就把用户送回首页：Edge 运行时够不到数据库，
+    // 无从判断会话是否真的有效。删库/换库/会话过期后浏览器仍持有旧 Cookie，
+    // 会被送回首页、再被 requireUser 踢回登录页，形成 ERR_TOO_MANY_REDIRECTS 死循环。
     return NextResponse.next();
   }
 
