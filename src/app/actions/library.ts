@@ -781,6 +781,13 @@ function validateEpisodeProgress(
 /**
  * 新增一条观影流水。同一部作品看第二次即再插一行，
  * watchIndex 递增，天然表达二刷三刷。
+ *
+ * 剧集的刷次按「季」独立计数，不跨整部作品：
+ * 多季剧在豆瓣是一季一个条目、用户也是一季一季地重看，二刷时逐季各记一条，
+ * 若按整部作品取 max+1 递增，同一轮二刷会被拆成 2、3、4……（怪奇物语 5 季
+ * 显示成「5 刷」）。按季计数后，二刷的每一季都拿到 2，整剧徽章取各季最大值
+ * 仍是 2，与「整部重看一遍」的直觉一致；电影没有季，退化为按作品递增，
+ * 二刷依旧是 2，行为不变。
  */
 export async function createViewRecordAction(
   _prev: FormState,
@@ -809,10 +816,20 @@ export async function createViewRecordAction(
   );
   if (progressError) return { error: progressError };
 
+  // 刷次只在「同一部作品的同一季」内递增。季为未标记（null）时统一按 null 组算，
+  // 电影因此退化成「按作品递增」——它们本来就没有季，二刷即 2。
+  // NULL 用 `=` 比不出来，得走 isNull，否则电影二刷会永远算出 1。
   const maxRow = db
     .select({ value: sql<number>`coalesce(max(${viewRecord.watchIndex}), 0)` })
     .from(viewRecord)
-    .where(eq(viewRecord.workId, workId))
+    .where(
+      and(
+        eq(viewRecord.workId, workId),
+        progressSeason == null
+          ? isNull(viewRecord.progressSeason)
+          : eq(viewRecord.progressSeason, progressSeason),
+      ),
+    )
     .get();
 
   const inserted = db

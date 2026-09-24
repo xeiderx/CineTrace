@@ -377,7 +377,8 @@ export default async function WorkDetailPage({
 
   const latest = latestRecord(records);
   // 刷次取下流水的最大 watchIndex，不能数流水条数：
-  // 豆瓣按季建条目，多季剧一季一条流水，按条数算会把季数当刷数（7 季剧显示成 7 刷）
+  // 豆瓣按季建条目，多季剧一季一条流水，按条数算会把季数当刷数（7 季剧显示成 7 刷）。
+  // 各季刷次独立计数，取最大值即「整部重看几轮」
   const watchIndex = records.reduce((max, r) => Math.max(max, r.watchIndex), 1);
   // 整剧进度优先看逐集数据：它比 progressSeason/episodesWatched 这类手填列准；
   // 带上最新状态，弃看的剧才不会在进度里写着「追剧中」

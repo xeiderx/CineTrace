@@ -71,6 +71,13 @@
       "when": 1790084427362,
       "tag": "0009_unusual_venom",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1790253670156,
+      "tag": "0010_watch_index_per_season",
+      "breakpoints": true
     }
   ]
 }

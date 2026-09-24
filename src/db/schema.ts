@@ -184,6 +184,11 @@ export const person = sqliteTable(
 /**
  * 观影记录：看一次 = 一行。
  * 二刷即再插一行，watchIndex 递增，天然支持「二刷三刷」。
+ *
+ * 剧集的刷次按「季」独立计数（同一 work_id + progress_season 内递增）：
+ * 多季剧逐季重看一轮时，每一季都拿到同一个刷次，整剧取最大值仍是这一轮；
+ * 若跨整部作品递增，同一轮二刷会被拆成 2、3、4……（怪奇物语 5 季显示成「5 刷」）。
+ * 电影没有季，退化为按作品递增。
  */
 export const viewRecord = sqliteTable(
   "view_record",
@@ -234,7 +239,11 @@ export const viewRecord = sqliteTable(
     ),
 
     /* ---- 刷次 ---- */
-    /** 第几刷：1 为首刷，2 为二刷 */
+    /**
+     * 第几刷：1 为首刷，2 为二刷。
+     * 剧集按「季」独立计数，只统计同一 `progressSeason` 下的记录；
+     * 电影/未标记季的记录统一按 null 组处理，等价于按作品递增。
+     */
     watchIndex: integer("watch_index").notNull().default(1),
 
     /* ---- 剧集进度：看到第几季第几集 ---- */
@@ -299,7 +308,8 @@ export const viewRecord = sqliteTable(
  * 表达不了，也算不出某季的确切起止时间。这里一集一行，季进度、整剧进度、
  * 季起止时间全部由它派生。
  *
- * `watchIndex` 与 view_record 同义：二刷时按同一套刷次编号另开一组逐集记录。
+ * `watchIndex` 与 view_record 同义（剧集按季独立计数）：二刷时按同一套刷次编号另开一组逐集记录。
+ * 注意目前逐集标记只写第 1 刷，多刷的逐集记录尚未实现。
  */
 export const viewEpisode = sqliteTable(
   "view_episode",
@@ -314,7 +324,7 @@ export const viewEpisode = sqliteTable(
       .notNull()
       .references(() => work.id, { onDelete: "cascade" }),
 
-    /** 第几刷，与 view_record.watchIndex 对应 */
+    /** 第几刷，与 view_record.watchIndex 同义 */
     watchIndex: integer("watch_index").notNull().default(1),
 
     seasonNumber: integer("season_number").notNull(),
