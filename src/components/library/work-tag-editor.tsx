@@ -64,13 +64,12 @@ export function WorkTagEditor(props: WorkTagEditorProps) {
       : attached.map((t) => ({ key: String(t.id), name: t.name, color: t.color }));
 
   const attachedNames = new Set(chips.map((chip) => chip.name));
-  const available = allTags.filter((t) => !attachedNames.has(t.name));
 
+  // 选完不关弹层，方便一口气挂多个
   function attach(value: string) {
     const trimmed = value.trim();
     if (!trimmed) return;
     setName("");
-    setOpen(false);
 
     if (draftNames != null && onDraftChange) {
       // 重名直接忽略：标签名在 tag 表里有唯一索引，重复提交没有意义
@@ -151,20 +150,28 @@ export function WorkTagEditor(props: WorkTagEditorProps) {
             autoFocus
           />
 
-          {available.length > 0 ? (
-            <div className="flex flex-wrap gap-1">
-              {available.slice(0, 12).map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  disabled={pending}
-                  onClick={() => attach(t.name)}
-                  className="rounded-4xl bg-muted px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                  style={tagChipStyle(t.color)}
-                >
-                  {t.name}
-                </button>
-              ))}
+          {allTags.length > 0 ? (
+            <div className="flex max-h-48 flex-wrap gap-1 overflow-y-auto">
+              {allTags.map((t) => {
+                const on = attachedNames.has(t.name);
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    disabled={pending}
+                    aria-pressed={on}
+                    onClick={() => (on ? detach(t.name) : attach(t.name))}
+                    className={
+                      on
+                        ? "rounded-4xl px-2 py-0.5 text-xs ring-1 ring-foreground/30 transition-colors"
+                        : "rounded-4xl bg-muted px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                    }
+                    style={on ? tagChipStyle(t.color) : undefined}
+                  >
+                    {t.name}
+                  </button>
+                );
+              })}
             </div>
           ) : (
             <p className="text-xs text-muted-foreground">
