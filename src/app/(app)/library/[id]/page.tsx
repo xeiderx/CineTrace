@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import type { ReactNode } from "react";
 import { notFound } from "next/navigation";
 import { CalendarDays, Clock, Film, ListChecks, Star, Tv } from "lucide-react";
 import {
@@ -67,13 +68,13 @@ export async function generateMetadata({
 }
 
 /** 元信息的一行：标签 + 值，值为空则整行不渲染 */
-function InfoRow({ label, value }: { label: string; value: string | null }) {
+function InfoRow({ label, value }: { label: string; value: ReactNode }) {
   if (!value) return null;
   return (
     <div className="flex gap-3 text-sm">
-      {/* 窄屏要和海报平分宽度，标签列收窄一点，留给值的位置才够 */}
-      <span className="w-14 shrink-0 text-muted-foreground sm:w-20">{label}</span>
-      <span className="min-w-0 flex-1">{value}</span>
+      {/* 标签列固定成窄宽，值列把剩余宽度全拿走；通栏后不再需要桌面端加宽那一档 */}
+      <span className="w-14 shrink-0 text-muted-foreground sm:w-16">{label}</span>
+      <span className="min-w-0 flex-1 break-words">{value}</span>
     </div>
   );
 }
@@ -486,9 +487,11 @@ export default async function WorkDetailPage({
       </div>
 
       {/* 窄屏也保持左右两栏：海报单独占一列，名称、标签与信息块都贴着它排，
-          否则移动端海报右侧会空出一大片，整页被拉得很长 */}
-      <div className="flex gap-4 sm:gap-6">
-        <div className="w-28 shrink-0 sm:w-40 md:w-48">
+          否则移动端海报右侧会空出一大片，整页被拉得很长。
+          这一栏只放「跟海报同高才好对照」的内容；数据条与简介放在下方通栏，
+          免得宽屏时右栏被拉成超宽的衡量，简介每行拖到一百多字。 */}
+      <div className="flex items-start gap-4 sm:gap-6">
+        <div className="w-28 shrink-0 sm:w-40 md:w-52">
           <div className="overflow-hidden rounded-xl ring-1 ring-foreground/10">
             <WorkPoster
               title={item.title}
@@ -498,7 +501,7 @@ export default async function WorkDetailPage({
           </div>
         </div>
 
-        <div className="min-w-0 flex-1 space-y-4">
+        <div className="min-w-0 flex-1 space-y-3">
           <div className="space-y-2">
             <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">
               {item.title}
@@ -526,32 +529,32 @@ export default async function WorkDetailPage({
             />
           </div>
 
-          <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-sm text-muted-foreground">
-            <span className="inline-flex items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm text-muted-foreground">
+            <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
               {isTv ? <Tv className="size-3.5" /> : <Film className="size-3.5" />}
               {mediaTypeLabel(item.mediaType)}
             </span>
             {item.runtime ? (
-              <span className="inline-flex items-center gap-1.5">
+              <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
                 <Clock className="size-3.5" />
                 {isTv ? `单集 ${item.runtime} 分钟` : formatMinutes(item.runtime)}
               </span>
             ) : null}
             {item.seasonCount || item.episodeCount ? (
-              <span>
+              <span className="whitespace-nowrap">
                 {item.seasonCount ? `${item.seasonCount} 季` : ""}
                 {item.seasonCount && item.episodeCount ? " · " : ""}
                 {item.episodeCount ? `${item.episodeCount} 集` : ""}
               </span>
             ) : null}
             {item.releaseDate ? (
-              <span className="inline-flex items-center gap-1.5">
+              <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
                 <CalendarDays className="size-3.5" />
                 {item.releaseDate} 首播
               </span>
             ) : null}
             {progressText ? (
-              <span className="text-primary">{progressText}</span>
+              <span className="whitespace-nowrap text-primary">{progressText}</span>
             ) : null}
           </div>
 
@@ -571,32 +574,44 @@ export default async function WorkDetailPage({
               还没有观影记录，标签与来源渠道都要挂在某一次观看上。
             </p>
           )}
-
-          <div className="space-y-2 border-t border-border/60 pt-4">
-            <InfoRow label="类型" value={genres.join(" / ")} />
-            <InfoRow label="国家" value={countries.join(" / ")} />
-            <InfoRow label="导演" value={directors.join(" / ")} />
-            {/* 有 TMDB 头像时主演交给下方演员墙，只有手动录入的才退化成文字行 */}
-            {castPortraits.length === 0 ? (
-              <InfoRow
-                label="主演"
-                value={cast.map((c) => c.name).join(" / ")}
-              />
-            ) : null}
-            <InfoRow label="上映" value={formatDate(item.releaseDate, "")} />
-            <InfoRow
-              label="编号"
-              value={externalIds.length > 0 ? externalIds.join(" · ") : null}
-            />
-            <InfoRow
-              label="匹配"
-              value={matchStatusLabel(item.matchStatus, item.tmdbId)}
-            />
-          </div>
-
-          {item.overview ? <WorkOverview overview={item.overview} /> : null}
         </div>
       </div>
+
+      {/* 数据条与简介通栏排：它们跟海报没有对照关系，留在右栏只会把右栏
+          拉成超宽的衡量——宽屏下每行拖到一百多字，窄屏下又只剩两百来像素，
+          编号那行必然折成两截。通栏后桌面端走两列网格、移动端仍是单列。 */}
+      <section className="mt-8 space-y-4">
+        <div className="grid gap-x-8 gap-y-2.5 sm:grid-cols-2">
+          <InfoRow label="类型" value={genres.join(" / ")} />
+          <InfoRow label="国家" value={countries.join(" / ")} />
+          <InfoRow label="导演" value={directors.join(" / ")} />
+          {/* 有 TMDB 头像时主演交给下方演员墙，只有手动录入的才退化成文字行 */}
+          {castPortraits.length === 0 ? (
+            <InfoRow label="主演" value={cast.map((c) => c.name).join(" / ")} />
+          ) : null}
+          <InfoRow label="上映" value={formatDate(item.releaseDate, "")} />
+          <InfoRow label="匹配" value={matchStatusLabel(item.matchStatus, item.tmdbId)} />
+          <InfoRow
+            label="编号"
+            value={
+              externalIds.length > 0 ? (
+                <span className="flex flex-wrap items-center gap-1.5">
+                  {externalIds.map((id) => (
+                    <span
+                      key={id}
+                      className="rounded-full bg-muted px-2 py-0.5 font-mono text-xs"
+                    >
+                      {id}
+                    </span>
+                  ))}
+                </span>
+              ) : null
+            }
+          />
+        </div>
+
+        {item.overview ? <WorkOverview overview={item.overview} /> : null}
+      </section>
 
       {castPortraits.length > 0 ? (
         <section className="mt-10">

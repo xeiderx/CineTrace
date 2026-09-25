@@ -27,7 +27,7 @@ export function WorkOverview({ overview }: { overview: string }) {
       <p className="text-xs font-medium text-muted-foreground">简介</p>
       <p
         ref={ref}
-        className={`whitespace-pre-wrap text-sm leading-relaxed text-foreground/90 ${
+        className={`max-w-[68ch] whitespace-pre-wrap text-sm leading-relaxed text-foreground/90 ${
           expanded ? "" : "line-clamp-4 sm:line-clamp-none"
         }`}
       >
