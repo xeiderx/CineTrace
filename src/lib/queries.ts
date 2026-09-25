@@ -379,9 +379,13 @@ function channelBadge(
  * 于是正在追的那一季会被还在原地、只看 `watchedAt` 的旧季压住，
  * 卡片和详情页顶部展示的「最新一次」就回退了。
  */
-export function latestRecord<T extends { watchedAt: string | null; id: number }>(
-  records: T[],
-): T | null {
+export function latestRecord<
+  T extends {
+    watchedAt: string | null;
+    id: number;
+    progressSeason?: number | null;
+  },
+>(records: T[]): T | null {
   if (records.length === 0) return null;
   return [...records].sort(compareByActivityDesc)[0];
 }

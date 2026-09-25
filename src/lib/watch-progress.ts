@@ -149,23 +149,40 @@ export function activityAt(record: {
 }
 
 /**
- * 流水比较器：活动时间晚的在前，相同时 `id` 大的在前，日期全空的一律排在最后。
+ * 流水比较器：活动时间晚的在前，同一天时季号大的在前，最后才退到 `id` 大的在前；
+ * 日期全空的一律排在最后。
+ *
+ * 加季号这一级是因为「一天补完好几季」很常见（如唐朝诡事录 S3/S4 同一天标看完），
+ * 而 `id` 只反映哪条先落库，与季号无关，同一天的两季谁上谁下是偶然的。
+ * 未标季的记录（电影、未匹配季）排在已标季的后面。
+ *
  * 详情页的流水排序、`queries.latestRecord` 与这里的 `latestBy` 共用它，
  * 保证「最近一次观看」在三处是同一个口径。
  */
 export function compareByActivityDesc<
-  T extends { watchedAt: string | null; id: number },
+  T extends {
+    watchedAt: string | null;
+    id: number;
+    progressSeason?: number | null;
+  },
 >(a: T, b: T): number {
   const left = activityAt(a) ?? "";
   const right = activityAt(b) ?? "";
   if (left !== right) return left < right ? 1 : -1;
+  const leftSeason = a.progressSeason ?? Number.NEGATIVE_INFINITY;
+  const rightSeason = b.progressSeason ?? Number.NEGATIVE_INFINITY;
+  if (leftSeason !== rightSeason) return leftSeason < rightSeason ? 1 : -1;
   return b.id - a.id;
 }
 
 /** 按「最近活动」取最近一条；与 queries.latestRecord 口径一致 */
-function latestBy<T extends { watchedAt: string | null; id: number }>(
-  rows: T[],
-): T | null {
+function latestBy<
+  T extends {
+    watchedAt: string | null;
+    id: number;
+    progressSeason?: number | null;
+  },
+>(rows: T[]): T | null {
   if (rows.length === 0) return null;
   return [...rows].sort(compareByActivityDesc)[0];
 }
