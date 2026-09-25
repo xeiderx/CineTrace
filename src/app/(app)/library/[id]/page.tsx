@@ -144,9 +144,11 @@ function WatchWindow({ rounds }: { rounds: WatchRound[] }) {
         {overall ? `观看 ${overall}` : "未填写观看时间"}
       </span>
       {rounds.length > 1 ? (
-        <ul className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+        /* 刷次一多就铺满好几行，手机端尤其臃肿；改成横向滑动，一屏内看完，
+           滑到底就知道还有几轮。横向滑动也是这个页面里筛选条、演职员墙的既有做法 */
+        <ul className="flex items-center gap-x-4 overflow-x-auto pb-1.5 text-xs text-muted-foreground">
           {rounds.map((round) => (
-            <li key={round.watchIndex}>
+            <li key={round.watchIndex} className="shrink-0 whitespace-nowrap">
               第 {round.watchIndex} 刷 {formatDateRange(round.from, round.to) ?? "—"}
             </li>
           ))}
