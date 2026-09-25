@@ -1,18 +1,7 @@
 "use client";
 
 import { useActionState, useState, useTransition } from "react";
-import {
-  Circle,
-  Clapperboard,
-  Laptop,
-  MonitorPlay,
-  Pencil,
-  Plus,
-  Smartphone,
-  Star,
-  Tv,
-  type LucideIcon,
-} from "lucide-react";
+import { Pencil, Plus, Star } from "lucide-react";
 import {
   deletePlatformAction,
   savePlatformAction,
@@ -20,6 +9,10 @@ import {
   type FormState,
 } from "@/app/actions/library";
 import { ConfirmDeleteButton } from "@/components/library/confirm-delete-button";
+import {
+  PLATFORM_ICON_NAMES,
+  PlatformIcon,
+} from "@/components/library/platform-icon";
 import {
   IconField,
   type IconLibraryOption,
@@ -37,38 +30,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { Platform } from "@/db/schema";
-import { cn } from "@/lib/utils";
-
-/** 平台图标名到组件的映射。用户可填的名字有限，未收录时退化为圆点。 */
-const ICONS: Record<string, LucideIcon> = {
-  "monitor-play": MonitorPlay,
-  laptop: Laptop,
-  smartphone: Smartphone,
-  clapperboard: Clapperboard,
-  tv: Tv,
-  circle: Circle,
-};
-
-/** 内置图标名清单，供 IconField 一键选中 */
-const ICON_NAMES = Object.keys(ICONS);
-
-/**
- * 平台图标。
- *
- * `platform.icon` 有两种写法：内置图标名（lucide）或从图标库选来的 data URL。
- * 按前缀区分，图片直接画 `<img>`，其余按名字查内置图标。
- */
-function PlatformGlyph({ icon, className }: { icon: string | null; className?: string }) {
-  if (icon?.startsWith("data:")) {
-    return (
-      // eslint-disable-next-line @next/next/no-img-element
-      <img src={icon} alt="" className={cn("object-contain", className)} />
-    );
-  }
-
-  const Icon = (icon && ICONS[icon]) || Circle;
-  return <Icon className={className} />;
-}
 
 /** 新建 / 编辑观影平台。默认平台由列表里的星标切换，不在表单里选。 */
 function PlatformFormDialog({
@@ -136,8 +97,8 @@ function PlatformFormDialog({
             label="平台图标"
             hint="可选内置图标，也可以用上传的图片或从图标库选择，会自动压缩到 128px 后存入数据库。"
             libraries={libraries}
-            namedIcons={ICON_NAMES}
-            renderValue={(value) => <PlatformGlyph icon={value} className="size-4" />}
+            namedIcons={PLATFORM_ICON_NAMES}
+            renderValue={(value) => <PlatformIcon icon={value} />}
           />
 
           <div className="grid gap-4 sm:grid-cols-2">
@@ -246,7 +207,7 @@ export function PlatformManager({
                   className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted"
                   style={item.color ? { color: item.color } : undefined}
                 >
-                  <PlatformGlyph icon={item.icon} className="size-4" />
+                  <PlatformIcon icon={item.icon} />
                 </span>
 
                 <div className="min-w-0 flex-1">

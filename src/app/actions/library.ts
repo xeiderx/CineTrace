@@ -742,6 +742,25 @@ export async function updateRecordSourceChannelAction(
   refreshLibrary(viewRecordWorkId(viewRecordId));
 }
 
+/**
+ * 只改某条流水的观影平台。与来源渠道同一个思路：走 updateViewRecordAction
+ * 整表回填会顺带覆盖状态与日期，改动面太大。
+ *
+ * 表单里传「跟随默认」哨兵时 int() 得到 null，正好表示这条流水回到默认平台。
+ */
+export async function updateRecordPlatformAction(
+  formData: FormData,
+): Promise<void> {
+  const viewRecordId = int(formData, "viewRecordId");
+  if (viewRecordId == null) return;
+
+  db.update(viewRecord)
+    .set({ platformId: int(formData, "platformId") })
+    .where(eq(viewRecord.id, viewRecordId))
+    .run();
+  refreshLibrary(viewRecordWorkId(viewRecordId));
+}
+
 /* -------------------------------------------------------------------------- */
 /*                                 观影记录管理                                 */
 /* -------------------------------------------------------------------------- */

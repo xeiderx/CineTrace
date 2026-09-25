@@ -5,11 +5,14 @@ import { ChevronDown, ChevronUp } from "lucide-react";
 
 /**
  * 作品简介。移动端先折到 4 行，点「展开全部」再看全文；
- * 桌面端宽度足够，直接铺开不受行数限制。
+ * 桌面端宽度足够，直接铺满通栏、不受行数限制。
  *
  * 折叠按钮只在「确实被截断」时出现——先量一次折叠态下的 scrollHeight，
  * 短简介不显示按钮，免得点开什么也没多出来。桌面端不折行，
  * scrollHeight 与 clientHeight 相等，按钮自然消失，不用额外写断点判断。
+ *
+ * 刻意不设 max-w：通栏宽 1152px 时，若限到 60~70ch（约 500px）就会在
+ * 左半截换行、右侧留一大片空白，观感比长行更难接受。
  */
 export function WorkOverview({ overview }: { overview: string }) {
   const [expanded, setExpanded] = useState(false);
@@ -27,7 +30,7 @@ export function WorkOverview({ overview }: { overview: string }) {
       <p className="text-xs font-medium text-muted-foreground">简介</p>
       <p
         ref={ref}
-        className={`max-w-[68ch] whitespace-pre-wrap text-sm leading-relaxed text-foreground/90 ${
+        className={`whitespace-pre-wrap text-sm leading-relaxed text-foreground/90 ${
           expanded ? "" : "line-clamp-4 sm:line-clamp-none"
         }`}
       >

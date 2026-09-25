@@ -106,22 +106,84 @@ function RatingPicker({
 
 /** 三个日期字段的草稿值，空串表示没填 */
 type DateDraft = { watchedAt: string; startedAt: string; finishedAt: string };
+type DateField = keyof DateDraft;
 
 /**
  * 按状态带出今天的日期，省掉手填：看过补「标记 + 看完」，在看补「标记 + 开始」。
- * 想看、搁置、弃看没有对应的观看日期，一律不动。
+ * 想看、搁置、弃看没有对应的观看日期，只把上次自动补的观看区间收回。
  *
  * 只补空字段，已有值不动——编辑一条旧流水时切换状态，不该把当初的日期改成今天。
- * 自动填的值照常可手改，改了就以手填为准。
+ *
+ * `autoFilled` 是上一次由这里自动补上的字段，开头的收回步骤是为了让状态能「改主意」：
+ * 新建时默认「看过」已经补了看完日期，用户切到「在看」时若不清掉，就会留着一条
+ * 与状态矛盾的看完日期。只收回观看区间，标记日期在哪种状态下都成立，永不收回；
+ * 用户手改过的字段早已被调用方从清单里划掉，因此手填值不会被误撤。
+ * 返回值里的 `filled` 是本次补的，供下次收回。
  */
-function withStatusDates(status: string, current: DateDraft): DateDraft {
-  if (status !== "watched" && status !== "watching") return current;
+function withStatusDates(
+  status: string,
+  current: DateDraft,
+  autoFilled: DateField[],
+): { draft: DateDraft; filled: DateField[] } {
+  // 观看区间只对「在看 / 看过」有意义，其余状态下把自动补的起止日期收回
+  const viewing = status === "watched" || status === "watching";
+
+  const draft = { ...current };
+  for (const key of autoFilled) {
+    if (key !== "watchedAt") draft[key] = "";
+  }
+
+  const filled: DateField[] = [];
+  if (!viewing) return { draft, filled };
+
   const today = todayIso();
-  return {
-    watchedAt: current.watchedAt || today,
-    startedAt: status === "watching" ? current.startedAt || today : current.startedAt,
-    finishedAt: status === "watched" ? current.finishedAt || today : current.finishedAt,
+  const fill = (key: DateField) => {
+    if (draft[key]) return;
+    draft[key] = today;
+    filled.push(key);
   };
+
+  fill("watchedAt");
+  if (status === "watching") fill("startedAt");
+  if (status === "watched") fill("finishedAt");
+  return { draft, filled };
+}
+
+/** 带「清除」入口的日期输入：日期填上就得能撤，否则记错了只能删掉整条流水重来 */
+function DateInput({
+  label,
+  name,
+  value,
+  onChange,
+}: {
+  label: string;
+  name: DateField;
+  value: string;
+  onChange: (key: DateField, next: string) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <Label htmlFor={name}>{label}</Label>
+        {value ? (
+          <button
+            type="button"
+            onClick={() => onChange(name, "")}
+            className="text-xs text-muted-foreground transition-colors hover:text-foreground"
+          >
+            清除
+          </button>
+        ) : null}
+      </div>
+      <Input
+        id={name}
+        name={name}
+        type="date"
+        value={value}
+        onChange={(event) => onChange(name, event.target.value)}
+      />
+    </div>
+  );
 }
 
 /**
@@ -176,6 +238,16 @@ export function ViewRecordDialog({
     startedAt: record?.startedAt ?? "",
     finishedAt: record?.finishedAt ?? "",
   });
+
+  // 当前哪几个日期是上一步自动补上的。切状态时只收回这几个，
+  // 手填的日期不在清单里，因此改状态不会把用户自己填的日子抹掉
+  const [autoFilledDates, setAutoFilledDates] = useState<DateField[]>([]);
+
+  // 日期一律走这里改：一旦用户动过某个字段，就把它从自动补的清单里划掉
+  const changeDate = (key: DateField, next: string) => {
+    setDateDraft((prev) => ({ ...prev, [key]: next }));
+    setAutoFilledDates((prev) => prev.filter((field) => field !== key));
+  };
 
   // 季号要跟着用户的选择走，才知道该用哪一季的集数去卡上限，
   // 所以这里是受控的（Radix Select 的 value 仍会随表单一起提交）。
@@ -249,21 +321,26 @@ export function ViewRecordDialog({
           const nextStatus = record?.status ?? "watched";
           setStatusValue(nextStatus);
           setRatingValue(record?.rating ?? null);
-          setDateDraft(
+          if (record) {
+            // 编辑时把记录上的日期拉回来，这些是人填的，不归自动补的清单管，
+            // 之后切状态也不该被收回
+            setDateDraft({
+              watchedAt: record.watchedAt ?? "",
+              startedAt: record.startedAt ?? "",
+              finishedAt: record.finishedAt ?? "",
+            });
+            setAutoFilledDates([]);
+          } else {
             // 新建时按默认状态先带出今天的日期，省掉手填；
-            // 编辑时把记录上的日期拉回来，缺哪个补哪个由用户切状态时再说
-            record
-              ? {
-                  watchedAt: record.watchedAt ?? "",
-                  startedAt: record.startedAt ?? "",
-                  finishedAt: record.finishedAt ?? "",
-                }
-              : withStatusDates(nextStatus, {
-                  watchedAt: "",
-                  startedAt: "",
-                  finishedAt: "",
-                }),
-          );
+            // 补了哪几个要记下来，用户改状态时才收得回
+            const { draft, filled } = withStatusDates(
+              nextStatus,
+              { watchedAt: "", startedAt: "", finishedAt: "" },
+              [],
+            );
+            setDateDraft(draft);
+            setAutoFilledDates(filled);
+          }
           setProgressSeason(record?.progressSeason ?? null);
           setChannelValue(
             record?.sourceChannelId != null
@@ -312,8 +389,16 @@ export function ViewRecordDialog({
                 value={statusValue}
                 onValueChange={(value) => {
                   setStatusValue(value);
-                  // 切到「看过 / 在看」时顺手补上今天的日期，省掉手填
-                  setDateDraft((prev) => withStatusDates(value, prev));
+                  // 切状态时先把上次自动补的日期收回，再按新状态补今天的日期。
+                  // 收回是为了不留下与新状态矛盾的日期：默认「看过」补过看完日期，
+                  // 切到「在看」时它就该消失；手填的日期不在清单里，不受影响
+                  const { draft, filled } = withStatusDates(
+                    value,
+                    dateDraft,
+                    autoFilledDates,
+                  );
+                  setDateDraft(draft);
+                  setAutoFilledDates(filled);
                 }}
               >
                 <SelectTrigger id="status" className="h-8 w-full">
@@ -334,18 +419,12 @@ export function ViewRecordDialog({
               <RatingPicker value={ratingValue} onChange={setRatingValue} />
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="watchedAt">标记日期</Label>
-              <Input
-                id="watchedAt"
-                name="watchedAt"
-                type="date"
-                value={dateDraft.watchedAt}
-                onChange={(event) =>
-                  setDateDraft((prev) => ({ ...prev, watchedAt: event.target.value }))
-                }
-              />
-            </div>
+            <DateInput
+              label="标记日期"
+              name="watchedAt"
+              value={dateDraft.watchedAt}
+              onChange={changeDate}
+            />
 
             <div className="space-y-2">
               <Label htmlFor="platformId">观影平台</Label>
@@ -464,31 +543,19 @@ export function ViewRecordDialog({
               </DropdownMenu>
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="startedAt">开始观看</Label>
-              <Input
-                id="startedAt"
-                name="startedAt"
-                type="date"
-                value={dateDraft.startedAt}
-                onChange={(event) =>
-                  setDateDraft((prev) => ({ ...prev, startedAt: event.target.value }))
-                }
-              />
-            </div>
+            <DateInput
+              label="开始观看"
+              name="startedAt"
+              value={dateDraft.startedAt}
+              onChange={changeDate}
+            />
 
-            <div className="space-y-2">
-              <Label htmlFor="finishedAt">看完日期</Label>
-              <Input
-                id="finishedAt"
-                name="finishedAt"
-                type="date"
-                value={dateDraft.finishedAt}
-                onChange={(event) =>
-                  setDateDraft((prev) => ({ ...prev, finishedAt: event.target.value }))
-                }
-              />
-            </div>
+            <DateInput
+              label="看完日期"
+              name="finishedAt"
+              value={dateDraft.finishedAt}
+              onChange={changeDate}
+            />
           </div>
 
           {isTv ? (

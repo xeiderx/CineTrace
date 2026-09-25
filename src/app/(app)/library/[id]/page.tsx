@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { notFound } from "next/navigation";
-import { CalendarDays, Clock, Film, ListChecks, Star, Tv } from "lucide-react";
+import { CalendarDays, CalendarRange, Clock, Film, ListChecks, Star, Tv } from "lucide-react";
 import {
   deleteViewRecordAction,
   deleteWorkAction,
@@ -16,6 +16,7 @@ import { ViewRecordDialog } from "@/components/library/view-record-dialog";
 import { ViewRecordMatchDialog } from "@/components/library/view-record-match-dialog";
 import { WatchingStatusMenu } from "@/components/library/watching-status-menu";
 import { SourceChannelSelect } from "@/components/library/source-channel-select";
+import { PlatformSelect } from "@/components/library/platform-select";
 import { WorkFormDialog } from "@/components/library/work-form-dialog";
 import { WorkMatchDialog } from "@/components/library/work-match-dialog";
 import { WorkOverview } from "@/components/library/work-overview";
@@ -79,26 +80,6 @@ function InfoRow({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
-/** 观影平台小标签：平台自身颜色优先，未指定平台时标注「默认」 */
-function PlatformChip({ record }: { record: ViewRecordWithPlatform }) {
-  if (!record.platformName) return null;
-  return (
-    <span className="inline-flex items-center gap-1.5 rounded-4xl bg-muted px-2 py-0.5 text-xs">
-      {record.platformColor ? (
-        <span
-          aria-hidden
-          className="size-2 rounded-full"
-          style={{ backgroundColor: record.platformColor }}
-        />
-      ) : null}
-      {record.platformName}
-      {record.isDefaultPlatform ? (
-        <span className="text-muted-foreground">（默认）</span>
-      ) : null}
-    </span>
-  );
-}
-
 /**
  * 单条观影流水的展示：状态、评分、时间、平台、剧集进度、短评与该次的标签
  */
@@ -131,6 +112,16 @@ function ViewRecordItem({
     episodesWatched: record.episodesWatched,
   });
   const range = formatDateRange(record.startedAt, record.finishedAt);
+  // 标记时间与观看窗口讲的是同一次观看，合并成一句连读，省下一行高度。
+  // 「开始于 X」只在没有观看区间时才顶上，否则和区间里的左端重复。
+  const marker = record.watchedAt
+    ? `标记于 ${record.watchedAt}`
+    : record.startedAt && !range
+      ? `开始于 ${record.startedAt}`
+      : null;
+  const timeText =
+    [marker, range ? `观看 ${range}` : null].filter(Boolean).join(" · ") ||
+    "未填写日期";
 
   return (
     <li className="flex gap-3 px-4 py-4">
@@ -144,27 +135,26 @@ function ViewRecordItem({
       </div>
 
       <div className="min-w-0 flex-1 space-y-1.5">
+        {/* 第一行是「这是什么状态、从哪看、在哪个平台看、觉得怎么样」，
+            渠道与平台都是点击即改的图标，挨在一起才好对照 */}
         <div className="flex flex-wrap items-center gap-2">
           <span
             className={`inline-flex h-5 items-center rounded-4xl px-2 text-xs font-medium ${viewStatusTone(record.status)}`}
           >
             {viewStatusLabel(record.status)}
           </span>
-          {/* 来源渠道跟在状态徽标旁：选中后就地折叠成纯图标，点图标再展开改 */}
+          {/* 来源渠道与观影平台都跟在状态徽标旁：选中后就地折叠成纯图标，点图标再展开改 */}
           <SourceChannelSelect
             viewRecordId={record.id}
             current={record.sourceChannelId}
             sourceChannels={sourceChannels}
           />
+          <PlatformSelect
+            viewRecordId={record.id}
+            current={record.platformId}
+            platforms={platforms}
+          />
           <RatingStars value={record.rating} />
-          <span className="text-xs text-muted-foreground">
-            {record.watchedAt
-              ? `标记于 ${record.watchedAt}`
-              : record.startedAt
-                ? `开始于 ${record.startedAt}`
-                : "未填写日期"}
-          </span>
-          <PlatformChip record={record} />
           {/* 豆瓣把它删掉/合并/转私密后本地仍留着这条流水，只是打上时间戳。
               清理与否由用户决定，因此只提示、不自动删。 */}
           {record.doubanRemovedAt ? (
@@ -177,8 +167,9 @@ function ViewRecordItem({
           ) : null}
         </div>
 
+        {/* 第二行：时间连读 + 进度 */}
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-          {range ? <span>观看 {range}</span> : null}
+          <span>{timeText}</span>
           {progress ? <span>{progress}</span> : null}
         </div>
 
@@ -412,6 +403,11 @@ export default async function WorkDetailPage({
   const progressText = progress
     ? showProgressLabel(progress, latest?.status ?? null)
     : null;
+  // 头部只回答「这部作品现在是什么情况」，所以观看起止取最新一次流水的口径，
+  // 与来源渠道、平台图标保持一致；各刷各自的区间留在下方观影记录里。
+  const latestRange = latest
+    ? formatDateRange(latest.startedAt, latest.finishedAt)
+    : null;
   // 面板里的季切换、日期默认值都在客户端用，这里把服务端数据裁成纯值再下传
   const today = todayIso();
   const panelSeasons: PanelSeason[] = seasons.map((season) => ({
@@ -515,15 +511,24 @@ export default async function WorkDetailPage({
               status={latest?.status ?? null}
               country={countries[0] ?? null}
               removedCount={records.filter((r) => r.doubanRemovedAt != null).length}
-              // 渠道控件就挂在状态徽标旁：两者都回答「现在是什么情况」，
+              // 渠道与平台控件都挂在状态徽标旁：三者都回答「现在是什么情况」，
               // 摆在同一行才好对照；没有流水时无处可挂，退回下方提示
               trailing={
                 latest ? (
-                  <SourceChannelSelect
-                    viewRecordId={latest.id}
-                    current={latest.sourceChannelId}
-                    sourceChannels={sourceChannels}
-                  />
+                  <>
+                    <SourceChannelSelect
+                      viewRecordId={latest.id}
+                      current={latest.sourceChannelId}
+                      sourceChannels={sourceChannels}
+                    />
+                    {/* 平台跟在渠道之后，同样点击即改；这里只留图标，名称进 title */}
+                    <PlatformSelect
+                      viewRecordId={latest.id}
+                      current={latest.platformId}
+                      platforms={platforms}
+                      variant="icon"
+                    />
+                  </>
                 ) : null
               }
             />
@@ -551,6 +556,12 @@ export default async function WorkDetailPage({
               <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
                 <CalendarDays className="size-3.5" />
                 {item.releaseDate} 首播
+              </span>
+            ) : null}
+            {latestRange ? (
+              <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                <CalendarRange className="size-3.5" />
+                观看 {latestRange}
               </span>
             ) : null}
             {progressText ? (
