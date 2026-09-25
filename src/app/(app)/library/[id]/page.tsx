@@ -279,6 +279,8 @@ function SeasonItem({
   const poster = posterUrl(season.posterPath, "w185");
   const { record } = season;
   const total = season.episodeCount;
+  // 已公布未开播的季：集数是 TMDB 的占位值（恒为 1），不能当真实进度展示
+  const upcoming = season.upcoming;
 
   return (
     <li>
@@ -312,7 +314,11 @@ function SeasonItem({
             <div className="min-w-0 flex-1 space-y-2">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="font-medium">{season.name}</span>
-                {season.completed ? (
+                {upcoming ? (
+                  <span className="inline-flex h-5 items-center rounded-4xl bg-muted px-2 text-xs font-medium text-muted-foreground">
+                    未播出
+                  </span>
+                ) : season.completed ? (
                   <span className="inline-flex h-5 items-center rounded-4xl bg-primary/15 px-2 text-xs font-medium text-primary">
                     {season.completionSource === "douban" ? "豆瓣已看完" : "已看完"}
                   </span>
@@ -330,7 +336,9 @@ function SeasonItem({
               </div>
 
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                {total > 0 ? (
+                {upcoming ? (
+                  <span>已公布，尚未开播</span>
+                ) : total > 0 ? (
                   <span>
                     已看 {season.watchedCount}/{total} 集
                   </span>
@@ -340,7 +348,7 @@ function SeasonItem({
                 {season.airDate ? <span>{season.airDate} 首播</span> : null}
               </div>
 
-              {total > 0 ? (
+              {!upcoming && total > 0 ? (
                 <Progress value={(season.watchedCount / total) * 100} />
               ) : null}
 
@@ -412,6 +420,7 @@ export default async function WorkDetailPage({
     watchedEpisodes: season.watchedEpisodes,
     completed: season.completed,
     completionSource: season.completionSource,
+    upcoming: season.upcoming,
   }));
 
   const genres = parseStringList(item.genres);

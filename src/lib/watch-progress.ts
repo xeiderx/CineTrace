@@ -81,6 +81,8 @@ export type SeasonStats = SeasonInput & {
   completionSource: "progress" | "douban" | null;
   /** 该季是否有逐集记录。为 false 时 watchedCount 来自流水手填的兜底值 */
   hasEpisodeData: boolean;
+  /** 已公布、尚未开播的季。TMDB 对这类季只给占位数据，不能当正常季参与总集数与完成判定 */
+  upcoming: boolean;
   /** 「标记到第几集」的落点：已看集号的最大值 */
   lastWatched: number;
   /** 下一集集号；已看完或总集数未知时为 null */
@@ -102,7 +104,16 @@ export type ShowProgress = {
   totalCount: number;
   /** 正追到哪一季；无从判断时为 null */
   currentSeason: number | null;
-  /** 整剧看完：每一季都看完，或豆瓣已把最近一条流水标成「看过」 */
+  /**
+   * 下一个待播季的季号；没有已公布未开播的季时为 null。
+   *
+   * TMDB 对「已公布、未开播」的季只给占位数据（`air_date` 为空或未来日期、
+   * `episode_count` 恒为 1），拿它当正常季会让已播完的剧显示成「还差 1 集」。
+   * 因此这类季不计入 `totalCount`、不当 `currentSeason`、也不参与整剧完成判定，
+   * 只留一个季号供界面标「第 N 季待播」。
+   */
+  upcomingSeason: number | null;
+  /** 整剧看完：每一季都看完（待播季不算），或豆瓣已把最近一条流水标成「看过」 */
   completed: boolean;
   /** 整剧是否有逐集记录。为 false 时进度来自流水手填值 */
   hasEpisodeData: boolean;
@@ -235,6 +246,9 @@ export function buildShowProgress({
   /** `work.episodeCount`，没有分季结构时作为总集数的兜底 */
   episodeCount: number | null;
 }): ShowProgress {
+  // 「今天」在这里取一次就够：一季是不是还没播，全靠它跟 airDate 比
+  const today = todayIso();
+
   const episodesBySeason = new Map<number, EpisodeMark[]>();
   for (const mark of episodes) {
     const bucket = episodesBySeason.get(mark.seasonNumber);
@@ -259,6 +273,9 @@ export function buildShowProgress({
   const stats: SeasonStats[] = seasons.map((season) => {
     const marks = episodesBySeason.get(season.seasonNumber) ?? [];
     const record = latestBy(recordBySeason.get(season.seasonNumber) ?? []);
+
+    // 已公布但还没开播：TMDB 只给占位数据（air_date 为空或未来日期、集数恒为 1）
+    const upcoming = !season.airDate || season.airDate > today;
 
     const total = season.episodeCount;
     const uniqueEpisodes = Array.from(
@@ -293,7 +310,9 @@ export function buildShowProgress({
     }
 
     const watchedCount = watchedEpisodes.length;
-    const completed = total > 0 ? watchedCount >= total : doubanCompleted;
+    // 没开播的季谈不上看完：它的「集数」本身是 TMDB 的占位值
+    const completed =
+      !upcoming && (total > 0 ? watchedCount >= total : doubanCompleted);
     const completionSource: SeasonStats["completionSource"] = completed
       ? doubanCompleted
         ? "douban"
@@ -323,9 +342,11 @@ export function buildShowProgress({
       completed,
       completionSource,
       hasEpisodeData,
+      upcoming,
       lastWatched,
-      // 已看齐就没有下一集；否则取最大集号 +1，跳着看时也只会补在末尾
-      nextEpisode: completed ? null : lastWatched + 1,
+      // 已看齐就没有下一集；否则取最大集号 +1，跳着看时也只会补在末尾。
+      // 待播季没有「下一集」可推——它连集数都还没有
+      nextEpisode: completed || upcoming ? null : lastWatched + 1,
       startedAt: episodeStarted
         ? { value: episodeStarted, source: "episode" }
         : { value: fallbackStart, source: fallbackStart ? "douban" : null },
@@ -349,7 +370,12 @@ export function buildShowProgress({
     (m) => !knownSeasons.has(m.seasonNumber),
   ).length;
 
-  const seasonTotal = seasons.reduce((sum, s) => sum + (s.episodeCount ?? 0), 0);
+  // 待播季的集数是 TMDB 的占位值（恒为 1），算进总集数会凭空多出一集，
+  // 也会让「已看 82/83」永远差一格
+  const seasonTotal = stats.reduce(
+    (sum, s) => sum + (s.upcoming ? 0 : s.episodeCount ?? 0),
+    0,
+  );
   const totalCount = seasonTotal > 0 ? seasonTotal : episodeCount ?? 0;
 
   const latest = latestBy(records);
@@ -362,11 +388,15 @@ export function buildShowProgress({
       ? latest.episodesWatched
       : seasonWatchedSum;
 
-  // 有分季结构时以「每季都看完」为准；分季缺失（TMDB 没匹配上）时只能信豆瓣的「看过」
+  // 有分季结构时以「每季都看完」为准；分季缺失（TMDB 没匹配上）时只能信豆瓣的「看过」。
+  // 待播季永远算不上「看完」，不排除的话已播完的剧会被拖成没看完
+  const airedStats = stats.filter((s) => !s.upcoming);
   const completed =
-    seasons.length > 0
-      ? stats.every((s) => s.completed)
-      : latest?.status === "watched";
+    airedStats.length > 0
+      ? airedStats.every((s) => s.completed)
+      : stats.length > 0
+        ? false
+        : latest?.status === "watched";
 
   const startedAt = resolveShowDate({
     manualField: "startedAt",
@@ -388,13 +418,15 @@ export function buildShowProgress({
       : null,
   });
 
-  // 正追的那一季：从前往后第一个没看完的季。全部看完就没有「下一季」可推
-  const current = completed ? null : stats.find((s) => !s.completed) ?? null;
+  // 正追的那一季：从前往后第一个没看完的已播季。全部看完就没有「下一季」可推。
+  // 待播季不算——追一部还没上线的季没有意义，界面另外标「第 N 季待播」
+  const current = completed ? null : airedStats.find((s) => !s.completed) ?? null;
 
   return {
     watchedCount,
     totalCount: totalCount + orphanEpisodeCount,
     currentSeason: current?.seasonNumber ?? null,
+    upcomingSeason: stats.find((s) => s.upcoming)?.seasonNumber ?? null,
     completed,
     hasEpisodeData,
     startedAt,
@@ -411,7 +443,12 @@ export function buildShowProgress({
 export function showProgressLabel(
   progress: Pick<
     ShowProgress,
-    "currentSeason" | "watchedCount" | "totalCount" | "completed"
+    | "currentSeason"
+    | "upcomingSeason"
+    | "watchedCount"
+    | "totalCount"
+    | "completed"
+    | "completedSeasonCount"
   >,
   /**
    * 最新一条流水上的状态。弃看、搁置的剧不该说「追剧中」——文案会和旁边的状态徽标
@@ -419,9 +456,21 @@ export function showProgressLabel(
    */
   status?: string | null,
 ): string | null {
-  const { currentSeason, watchedCount, totalCount, completed } = progress;
+  const {
+    currentSeason,
+    upcomingSeason,
+    watchedCount,
+    totalCount,
+    completed,
+    completedSeasonCount,
+  } = progress;
 
   if (completed) {
+    // 老季看完、新季已公布未开播：说「第 3 季待播」比「已看完」更贴近事实，
+    // 也顺带解释了为什么这部剧还留在「在看」里
+    if (upcomingSeason != null) {
+      return `第 ${upcomingSeason} 季待播 · 前 ${completedSeasonCount} 季已看完`;
+    }
     return totalCount > 0 ? `已看完 · 共 ${totalCount} 集` : "已看完";
   }
   if (currentSeason != null) {
@@ -430,6 +479,8 @@ export function showProgressLabel(
       status === "dropped" ? "弃看" : status === "on_hold" ? "搁置中" : "追剧中";
     return `第 ${currentSeason} 季${state}${tail}`;
   }
+  // 只有待播季、还没有已播季可以追（跟上的一季刚公布）
+  if (upcomingSeason != null) return `第 ${upcomingSeason} 季待播`;
   if (watchedCount > 0) {
     return totalCount > 0 ? `已看 ${watchedCount}/${totalCount} 集` : `已看 ${watchedCount} 集`;
   }
@@ -452,9 +503,17 @@ function padEpisode(n: number): string {
  * 后面某一季，读起来像已经追到那儿了。
  */
 export function libraryProgressLabel(progress: ShowProgress): string | null {
-  const { completed, totalCount, seasons, currentSeason } = progress;
+  const { completed, totalCount, seasons, currentSeason, upcomingSeason, completedSeasonCount } =
+    progress;
 
   if (completed) {
+    // 老季看完、新季已公布未开播：报「已看完前 2 季」而不是「共 3 季」，
+    // 后者会让人以为第 3 季也看完了。卡片只有一行，不再多写「第 3 季待播」
+    if (upcomingSeason != null) {
+      return completedSeasonCount > 0
+        ? `已看完前 ${completedSeasonCount} 季`
+        : `第 ${upcomingSeason} 季待播`;
+    }
     if (totalCount <= 0) return null;
     // 没匹配上 TMDB 就没有分季结构，说不清有几季，只能报集数，
     // 免得写成「共 0 季 · 12 集」
@@ -514,10 +573,12 @@ export function nextEpisodeTarget(
   if (watchedCount === 0 && !options?.allowZeroProgress) return null;
 
   // currentSeason 只是「第一个没看完的季」，它可能没有集数（TMDB 没给分季结构），
-  // 这时往后找一个有集数的季，能做进度标记的才是有效目标
+  // 这时往后找一个有集数的季，能做进度标记的才是有效目标。
+  // 待播季要排除：它的占位集数会造出「标记第 1 集」按钮，点了就是给没播的剧记进度
   const season = seasons.find(
     (s) =>
       s.seasonNumber >= currentSeason &&
+      !s.upcoming &&
       !s.completed &&
       s.episodeCount > 0 &&
       s.nextEpisode != null &&
@@ -531,8 +592,9 @@ export function nextEpisodeTarget(
   if (episodeNumber == null) return null;
 
   const nextSeason =
-    seasons.find((s) => s.seasonNumber > season.seasonNumber && !s.completed) ??
-    null;
+    seasons.find(
+      (s) => s.seasonNumber > season.seasonNumber && !s.upcoming && !s.completed,
+    ) ?? null;
 
   return {
     seasonNumber: season.seasonNumber,

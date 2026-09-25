@@ -33,6 +33,8 @@ export type PanelSeason = {
   completed: boolean;
   /** 完成判定的来源：本地进度看齐 / 豆瓣标记看过 */
   completionSource: "progress" | "douban" | null;
+  /** 已公布、尚未开播的季。集数是 TMDB 的占位值，不能逐集标记 */
+  upcoming: boolean;
 };
 
 type ActionState = { error?: string; ok?: boolean; message?: string } | undefined;
@@ -79,16 +81,20 @@ export function SeasonProgressPanel({
 
   const watched = new Set(season.watchedEpisodes);
   const total = season.episodeCount;
+  // 未开播的季没有真实集数（TMDB 给的是占位值 1），整块标记区都要按「不可标」处理
+  const upcoming = season.upcoming;
   const lastWatched =
     season.watchedEpisodes.length > 0
       ? season.watchedEpisodes[season.watchedEpisodes.length - 1]
       : 0;
   const watchedCount = season.watchedEpisodes.length;
   const nextEpisode = lastWatched + 1;
-  const hasNextEpisode = total > 0 ? nextEpisode <= total : false;
+  const hasNextEpisode = !upcoming && total > 0 ? nextEpisode <= total : false;
   // 下一个还没看完的季。整季看完后提示「前往」，省去回列表再点一次
   const nextSeason =
-    seasons.find((s) => s.seasonNumber > season.seasonNumber && !s.completed) ?? null;
+    seasons.find(
+      (s) => s.seasonNumber > season.seasonNumber && !s.upcoming && !s.completed,
+    ) ?? null;
 
   function buildFormData(): FormData {
     const formData = new FormData();
@@ -177,7 +183,11 @@ export function SeasonProgressPanel({
         <DialogHeader>
           <DialogTitle className="flex flex-wrap items-center gap-2">
             {season.name}
-            {season.completed ? (
+            {upcoming ? (
+              <span className="inline-flex h-5 items-center rounded-4xl bg-muted px-2 text-xs font-medium text-muted-foreground">
+                未播出
+              </span>
+            ) : season.completed ? (
               <span className="inline-flex h-5 items-center gap-1 rounded-4xl bg-primary/15 px-2 text-xs font-medium text-primary">
                 <Check className="size-3" />
                 {season.completionSource === "douban" ? "豆瓣标记已看完" : "已看完"}
@@ -185,7 +195,9 @@ export function SeasonProgressPanel({
             ) : null}
           </DialogTitle>
           <DialogDescription>
-            点集号即把进度记到那一集；已看过的格子再点一次可撤销一集。
+            {upcoming
+              ? "这一季已公布但还没开播，等 TMDB 给出集数后才能逐集标记。"
+              : "点集号即把进度记到那一集；已看过的格子再点一次可撤销一集。"}
           </DialogDescription>
         </DialogHeader>
 
@@ -212,31 +224,43 @@ export function SeasonProgressPanel({
         <div className="space-y-2">
           <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
             <span>
-              {total > 0 ? `已看 ${watchedCount}/${total} 集` : `已看 ${watchedCount} 集`}
+              {upcoming
+                ? "尚未开播"
+                : total > 0
+                  ? `已看 ${watchedCount}/${total} 集`
+                  : `已看 ${watchedCount} 集`}
             </span>
             {lastWatched > 0 ? <span>最近记到第 {lastWatched} 集</span> : null}
           </div>
-          <Progress value={total > 0 ? (watchedCount / total) * 100 : 0} />
+          {!upcoming ? (
+            <Progress value={total > 0 ? (watchedCount / total) * 100 : 0} />
+          ) : null}
         </div>
 
-        <div className="space-y-2">
-          <Label htmlFor="progress-watched-at" className="flex items-center gap-1.5">
-            <CalendarDays className="size-3.5" />
-            标记日期
-          </Label>
-          <Input
-            id="progress-watched-at"
-            type="date"
-            value={watchedAt}
-            max={today}
-            onChange={(event) => setWatchedAt(event.target.value || today)}
-          />
-          <p className="text-xs text-muted-foreground">
-            新补的集数都记在这一天；已标好的集数保留各自原来的日期。
+        {!upcoming ? (
+          <div className="space-y-2">
+            <Label htmlFor="progress-watched-at" className="flex items-center gap-1.5">
+              <CalendarDays className="size-3.5" />
+              标记日期
+            </Label>
+            <Input
+              id="progress-watched-at"
+              type="date"
+              value={watchedAt}
+              max={today}
+              onChange={(event) => setWatchedAt(event.target.value || today)}
+            />
+            <p className="text-xs text-muted-foreground">
+              新补的集数都记在这一天；已标好的集数保留各自原来的日期。
+            </p>
+          </div>
+        ) : null}
+
+        {upcoming ? (
+          <p className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
+            这一季已公布但还没开播，TMDB 现在给的集数只是占位值。等它开播后会自动变成正常季，届时就能逐集标记。
           </p>
-        </div>
-
-        {total > 0 ? (
+        ) : total > 0 ? (
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-3">
               <span className="text-xs font-medium text-muted-foreground">
@@ -285,42 +309,44 @@ export function SeasonProgressPanel({
           </p>
         )}
 
-        <div className="flex flex-wrap gap-2">
-          {hasNextEpisode ? (
-            <Button
-              type="button"
-              size="sm"
-              disabled={pending}
-              onClick={() => markTo(nextEpisode, nextEpisode === total)}
-            >
-              {pending ? <Loader2 className="animate-spin" /> : null}
-              标记第 {nextEpisode} 集
-            </Button>
-          ) : null}
-          {total > 0 && !season.completed ? (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={pending}
-              onClick={() => markTo(total, true)}
-            >
-              <Check />
-              整季看完
-            </Button>
-          ) : null}
-          {watchedCount > 0 ? (
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              disabled={pending}
-              onClick={() => markTo(0)}
-            >
-              清空本季
-            </Button>
-          ) : null}
-        </div>
+        {!upcoming ? (
+          <div className="flex flex-wrap gap-2">
+            {hasNextEpisode ? (
+              <Button
+                type="button"
+                size="sm"
+                disabled={pending}
+                onClick={() => markTo(nextEpisode, nextEpisode === total)}
+              >
+                {pending ? <Loader2 className="animate-spin" /> : null}
+                标记第 {nextEpisode} 集
+              </Button>
+            ) : null}
+            {total > 0 && !season.completed ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={pending}
+                onClick={() => markTo(total, true)}
+              >
+                <Check />
+                整季看完
+              </Button>
+            ) : null}
+            {watchedCount > 0 ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                disabled={pending}
+                onClick={() => markTo(0)}
+              >
+                清空本季
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
       </DialogContent>
     </Dialog>
   );

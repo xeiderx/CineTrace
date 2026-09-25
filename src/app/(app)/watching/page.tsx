@@ -75,6 +75,9 @@ function currentSeason(progress: ShowProgress): SeasonStats | null {
  * 剩下去看那一页的判定只认两件事：整剧没看完，且已经动过——要么标过至少一集，
  * 要么豆瓣侧是在看。一集都没标的「在看」也留在列表里，否则刚把一部剧标成在看，
  * 它会立刻从这一页消失，用户反而找不到地方记第一集。
+ *
+ * 例外：已播季全部看完、但还有已公布未开播的新季（`upcomingSeason`），
+ * 仍然留在「在看」——这类剧本该跟着下一季继续追，退回档案库就等于忘了它。
  */
 function bucketOf(item: WorkListItem): WatchingTab | null {
   if (item.latestStatus === "dropped") return "dropped";
@@ -82,7 +85,8 @@ function bucketOf(item: WorkListItem): WatchingTab | null {
   if (item.latestStatus === "wish") return "wish";
 
   const progress = item.progress;
-  if (!progress || progress.completed) return null;
+  if (!progress) return null;
+  if (progress.completed && progress.upcomingSeason == null) return null;
   if (progress.watchedCount === 0 && item.latestStatus !== "watching") return null;
   return "watching";
 }
