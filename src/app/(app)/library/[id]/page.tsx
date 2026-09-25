@@ -80,6 +80,82 @@ function InfoRow({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
+/** 一轮观看的时间窗。两端都可能缺，缺哪端就只显示另一端 */
+type WatchRound = { watchIndex: number; from: string | null; to: string | null };
+
+/**
+ * 按刷次归并出每一轮观看的时间窗。
+ *
+ * 开始取 `startedAt`，没填就退回 `finishedAt`，两个都空才退回标记日期：手动记录时
+ * 多数人只知道「哪天看的」，会把日期填在看完日期上，此时它既是这季的结束、也是这季
+ * 最可信的开始。直接退到标记日期是错的——那是补记当天，往往晚于真实观看日，
+ * 会让「取最早」的一步跳过这一季，从而把整轮的起点抬高到别季的开始日期。
+ *
+ * 结束取 `finishedAt`，同样退回标记日期。
+ *
+ * 一轮会横跨好几季——多季剧每季一条流水，所以同一 `watchIndex` 下取最早的开始
+ * 与最晚的结束，合起来才是这一轮完整的区间。三个日期全空的流水（想看、弃看）跳过。
+ */
+function collectWatchRounds(
+  records: {
+    watchIndex: number;
+    watchedAt: string | null;
+    startedAt: string | null;
+    finishedAt: string | null;
+  }[],
+): WatchRound[] {
+  const byRound = new Map<number, { from: string | null; to: string | null }>();
+  for (const record of records) {
+    // 开始优先用「开始观看」；没填时退回「看完日期」而不是标记日期，
+    // 因为手动补记的一条流水常常只填了看完日期，标记日期则是补记当天
+    const from = record.startedAt ?? record.finishedAt ?? record.watchedAt;
+    const to = record.finishedAt ?? record.watchedAt;
+    if (!from && !to) continue;
+    const current = byRound.get(record.watchIndex) ?? { from: null, to: null };
+    if (from && (current.from === null || from < current.from)) current.from = from;
+    if (to && (current.to === null || to > current.to)) current.to = to;
+    byRound.set(record.watchIndex, current);
+  }
+  return [...byRound.entries()]
+    .map(([watchIndex, window]) => ({ watchIndex, ...window }))
+    .sort((a, b) => a.watchIndex - b.watchIndex);
+}
+
+/**
+ * 观看数据独立成行：先给整部作品的区间（最早开始 → 最晚结束），
+ * 多刷时再把每一轮的时间列出来。
+ *
+ * 单刷不列明细——一行区间已经把话说完了；只有多刷才需要逐轮对照，
+ * 海报上的刷次徽章只给了数字，具体哪轮是什么时候看的得看这里。
+ */
+function WatchWindow({ rounds }: { rounds: WatchRound[] }) {
+  let from: string | null = null;
+  let to: string | null = null;
+  for (const round of rounds) {
+    if (round.from && (from === null || round.from < from)) from = round.from;
+    if (round.to && (to === null || round.to > to)) to = round.to;
+  }
+  const overall = formatDateRange(from, to);
+
+  return (
+    <div className="space-y-1">
+      <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
+        <CalendarRange className="size-3.5" />
+        {overall ? `观看 ${overall}` : "未填写观看时间"}
+      </span>
+      {rounds.length > 1 ? (
+        <ul className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+          {rounds.map((round) => (
+            <li key={round.watchIndex}>
+              第 {round.watchIndex} 刷 {formatDateRange(round.from, round.to) ?? "—"}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
 /**
  * 单条观影流水的展示：状态、评分、时间、平台、剧集进度、短评与该次的标签
  */
@@ -403,11 +479,9 @@ export default async function WorkDetailPage({
   const progressText = progress
     ? showProgressLabel(progress, latest?.status ?? null)
     : null;
-  // 头部只回答「这部作品现在是什么情况」，所以观看起止取最新一次流水的口径，
-  // 与来源渠道、平台图标保持一致；各刷各自的区间留在下方观影记录里。
-  const latestRange = latest
-    ? formatDateRange(latest.startedAt, latest.finishedAt)
-    : null;
+  // 观看数据讲的是整部作品：起止取所有流水里最早开始与最晚结束，多刷时逐轮列出。
+  // 单看最新一刷会把「第一轮什么时候看的」丢掉，而这正是重看时最想对照的
+  const watchRounds = collectWatchRounds(records);
   // 面板里的季切换、日期默认值都在客户端用，这里把服务端数据裁成纯值再下传
   const today = todayIso();
   const panelSeasons: PanelSeason[] = seasons.map((season) => ({
@@ -558,16 +632,14 @@ export default async function WorkDetailPage({
                 {item.releaseDate} 首播
               </span>
             ) : null}
-            {latestRange ? (
-              <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
-                <CalendarRange className="size-3.5" />
-                观看 {latestRange}
-              </span>
-            ) : null}
             {progressText ? (
               <span className="whitespace-nowrap text-primary">{progressText}</span>
             ) : null}
           </div>
+
+          {/* 观看数据单独占一行：它是一段区间、多刷时还要逐轮展开，
+              夹在类型 / 时长那串短元信息里会被挤成半个换行，读起来断得莫名其妙 */}
+          {watchRounds.length > 0 ? <WatchWindow rounds={watchRounds} /> : null}
 
           {/* 标签行排在类型行之后：标签挂在「最新一次观看」上，
               历史各刷的记在下方各自的流水上，避免互相矛盾的信息堆在一起。
